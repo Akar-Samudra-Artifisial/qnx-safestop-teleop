@@ -6,6 +6,21 @@ the real-time control loop ramps velocity to zero and locks until re-armed.
 
 Entry for the QNX Global Hackathon — category **Robotics & Medical**.
 
+[![Watch the demo](docs/media/qnx-safestop-thumb.png)](https://youtu.be/asHE8_aUXQs)
+
+**[▶ Watch the 3-minute demo](https://youtu.be/asHE8_aUXQs)**
+
+## Screenshots
+
+| | |
+|---|---|
+| <img src="docs/media/01-overview.png" alt="Overview"><br>01 Overview | <img src="docs/media/02-link-loss.png" alt="Link loss to SAFE STOP"><br>02 Link loss → SAFE STOP in 158.6 ms |
+| <img src="docs/media/03-estop-plant.png" alt="E-STOP and HAM restart"><br>03 E-STOP and HAM restart | <img src="docs/media/04-latency.png" alt="Stop-latency bench"><br>04 1000-trial stop-latency bench |
+| <img src="docs/media/05-on-target.png" alt="pidin and /dev/teleop output"><br>05 Real pidin and /dev/teleop output | <img src="docs/media/06-architecture.png" alt="Architecture"><br>06 Architecture |
+| <img src="docs/media/07-operator-ui.png" alt="Operator UI"><br>07 Operator UI | |
+
+Screenshots and numbers come from the iOS Simulator + QNX 8.0 under QEMU; bench figures are in [docs/BENCH.md](docs/BENCH.md).
+
 ## Layout
 
 | Path | Contents |
