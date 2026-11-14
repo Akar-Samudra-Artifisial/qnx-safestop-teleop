@@ -17,6 +17,8 @@ const PORT = Number(argVal('--port', process.env.PORT ?? 8080));
 const QUIET = args.includes('--quiet');
 const TOKEN = process.env.TELEOP_TOKEN ?? '123456';
 const ALLOWED_ORIGIN = argVal('--origin', '');
+// --dev-plant: accept {type:'dev_plant', ok:boolean} to simulate simplant death/restart (test only).
+const DEV_PLANT = args.includes('--dev-plant');
 
 const DEADLINE_MS = 150;
 const CONTROL_HZ = 100;
@@ -37,6 +39,7 @@ const robot = {
   sp: { v: 0, w: 0 },
   lastHbUs: 0,
   seqAck: 0,
+  plantOk: true,
 };
 
 // hb_timeout detect_us history and `stats` reply, same shape/buckets as teleopd.
@@ -109,7 +112,9 @@ const broadcast = (msg) => {
 
 wss.on('connection', (ws, req) => {
   // Single operator: a new (authorised, not-ARMED) client replaces the previous one.
-  for (const c of wss.clients) if (c !== ws) c.terminate();
+  // --dev-plant control sockets (?dev=1) neither replace nor get replaced.
+  ws.dev = DEV_PLANT && new URL(req.url ?? '/', 'http://x').searchParams.get('dev') === '1';
+  if (!ws.dev) for (const c of wss.clients) if (c !== ws && !c.dev) c.terminate();
   log('client connected', req.socket.remoteAddress);
   ws.on('message', (data) => {
     let m;
@@ -133,8 +138,18 @@ wss.on('connection', (ws, req) => {
           };
         }
         break;
+      case 'dev_plant':
+        if (ws.dev && typeof m.ok === 'boolean') {
+          robot.plantOk = m.ok;
+          log(`plant ${m.ok ? 'up' : 'down'} (dev)`);
+          // Same as teleopd: plant lost while ARMED -> SAFE_STOP, detect_us -1.
+          if (!m.ok && robot.mode === 'ARMED') safeStop('plant_lost', -1);
+        }
+        break;
       case 'arm':
-        if (t - robot.lastHbUs <= DEADLINE_MS * 1000) {
+        if (!robot.plantOk) {
+          log('arm rejected: plant down');
+        } else if (t - robot.lastHbUs <= DEADLINE_MS * 1000) {
           robot.mode = 'ARMED';
           robot.sp = { v: 0, w: 0 };
           log('ARMED');
@@ -152,7 +167,7 @@ wss.on('connection', (ws, req) => {
   });
   ws.on('close', () => {
     log('client disconnected');
-    if (wss.clients.size === 0 && robot.mode === 'ARMED') safeStop('client_lost', 0);
+    if (![...wss.clients].some((c) => !c.dev) && robot.mode === 'ARMED') safeStop('client_lost', 0);
   });
 });
 
@@ -189,7 +204,7 @@ setInterval(() => {
     mode: robot.mode,
     hb_age_ms: Math.round(age),
     rtt: -1,
-    plant_ok: true,
+    plant_ok: robot.plantOk,
   });
 }, 1000 / STATE_HZ);
 

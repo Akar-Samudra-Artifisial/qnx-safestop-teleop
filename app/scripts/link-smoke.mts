@@ -70,6 +70,29 @@ await sleep(200);
 s = link.getSnapshot();
 check(s.state?.mode === 'SAFE_STOP' && s.events[0]?.reason === 'estop', 'E-STOP forces SAFE_STOP', s.events[0]?.reason);
 
+// Plant-down scenario: only against `mock-server.mjs --dev-plant` (SMOKE_DEV_PLANT=1).
+if (process.env.SMOKE_DEV_PLANT === '1') {
+  const { default: WS } = await import('ws');
+  const dev = new WS(`ws://${address}/?t=${token}&dev=1`);
+  await new Promise((r) => dev.once('open', r));
+  const state = () => link.getSnapshot().state;
+  link.setAxis(0, 0);
+  await sleep(300);
+  link.arm();
+  await waitFor(() => state()?.mode === 'ARMED', 1000);
+  dev.send(JSON.stringify({ type: 'dev_plant', ok: false }));
+  await waitFor(() => state()?.mode === 'SAFE_STOP' && state()?.plant_ok === false, 1000);
+  check(state()?.mode === 'SAFE_STOP' && link.getSnapshot().events[0]?.reason === 'plant_lost', 'plant down while ARMED -> SAFE_STOP plant_lost');
+  link.arm();
+  await sleep(300);
+  check(state()?.mode === 'SAFE_STOP', 'arm refused while plant down', state()?.mode);
+  dev.send(JSON.stringify({ type: 'dev_plant', ok: true }));
+  await sleep(100);
+  link.arm();
+  check(await waitFor(() => state()?.mode === 'ARMED', 1000), 'arm accepted after plant restored');
+  dev.close();
+}
+
 link.disconnect();
 console.log(failures === 0 ? 'ALL PASS' : `${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

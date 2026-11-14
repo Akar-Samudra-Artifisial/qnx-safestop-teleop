@@ -8,3 +8,15 @@ export function fmtUsAsMs(us: number): string {
   const ms = us / 1000;
   return fmtMs(ms, Math.abs(ms) < 10 ? 2 : 1);
 }
+
+/**
+ * hb_timeout: detect_us = last hb → SAFE_STOP detected ("deteksi").
+ * estop/others: detect_us = command received → handled ("proses").
+ * plant_lost (or any negative/non-finite value): no latency, reason label only.
+ */
+export function eventLatencyLabel(reason: string, detectMs: number): string {
+  if (reason === 'plant_lost') return 'plant hilang';
+  if (!Number.isFinite(detectMs) || detectMs < 0) return 'tanpa latensi';
+  const kind = reason === 'hb_timeout' ? 'deteksi' : 'proses';
+  return `${kind} ${fmtMs(detectMs, detectMs < 10 ? 2 : 1)} ms`;
+}
