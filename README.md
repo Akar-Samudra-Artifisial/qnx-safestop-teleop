@@ -22,14 +22,25 @@ Entry for the QNX Global Hackathon — category **Robotics & Medical**.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+**Security scope**: teleopd pairs with a 6-digit token over plain `ws://` — fine for a
+trusted LAN demo, not for the public internet (no TLS; do not port-forward 8080). Browser
+pages are refused by Origin, a second client cannot take over while ARMED, and the QEMU SSH
+forward listens on 127.0.0.1 only. Details: ARCHITECTURE "Pairing & threat model".
+
 ## Quick start
 
 ```sh
 # App
 cd app && npm install && npx expo start
 
-# QNX target in QEMU (image not yet built — see tools/qemu/run-qemu.sh)
-tools/qemu/run-qemu.sh path/to/qnx-image
+# QNX: build image + binaries in the SDP container (run.sh sources qnxsdp-env.sh)
+tools/sdp/run.sh /work/tools/sdp/make-image.sh
+tools/sdp/run.sh make -C qnx
+
+# Boot QEMU (TCG) on the Mac, deploy, test
+QEMU_SERIAL=build/qnx-image/serial.log tools/qemu/run-qemu.sh &
+TELEOP_TOKEN=123456 tools/qemu/deploy.sh
+python3 tools/wsclient/wsclient.py --token 123456
 ```
 
 ## License
