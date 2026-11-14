@@ -49,9 +49,64 @@ stops them after `-s` seconds. teleopd's threads: control `SCHED_FIFO` 50, net a
 |---|---|---|---|
 | 2 × `SCHED_RR` 10 | 1021 | p50 155.11 / p99 160.82 ms | Shares the CPUs with net (RR 10); control preempts it. |
 | 2 × `SCHED_FIFO` 10 | 1 (session armed, hog 3 s) | 158.2 ms | net and sshd starve while it runs (FIFO 10 never yields to RR 10), but control still detects on time. |
-| 2 × `SCHED_FIFO` 50 | 1 (session armed, hog 3 s) | **3011.9 ms** | **Misconfiguration example.** Same priority as control: FIFO does not preempt equal priority, so the check only runs when the hog ends. Anything at ≥ the control priority breaks the 150 ms guarantee. |
+| 2 × `SCHED_FIFO` 50 | 1 (session armed, hog 3 s) | **3011.9 ms** | **Misconfiguration example.** Same priority as control: FIFO does not preempt equal priority, so the check only runs when the hog ends. Anything at ≥ the control priority breaks the 150 ms guarantee. Reproduced below (6 + 3 trials). |
 
 Rule: the safety thread must be strictly above every CPU-bound thread in the system.
+
+### Priority-50 investigation with `pidin` (2026-11-15)
+
+Same VM (QEMU TCG, 2 vCPU, `pidin info`: 2 × Cortex-A57). All teleopd and latbench threads have
+runmask `0x3` (`pidin rmasks`), so any thread may run on either vCPU. Per trial (temporary
+script on the wsclient `Session` class): connect and arm with heartbeats running, start
+`on -p 60f sh cap.sh` on the target, which starts `latbench -p P -s S -n N` and, 1 s later, takes
+`pidin` snapshots; the client stops `hb` 1 s after starting the hog and waits for the event.
+With 2 hogs the net thread is starved from the hog's start, so the last `hb` teleopd received is
+about the hog's start time. Raw output: `build/bench/prio50/captures.txt` (not in git).
+
+| Hog (`latbench`) | Trials | `detect_us` (ms) | Event reached the client |
+|---|---|---|---|
+| 2 × FIFO 50, 3 s | 6 | 3001.2–3044.5 (median 3028.7) | when the hog ended (t+3.4 s) |
+| 2 × FIFO 50, 5 s | 3 | 5004.5–5039.8 | when the hog ended (t+5.4–5.5 s) |
+| 2 × FIFO 51, 3 s | 2 | 3002.2, 3022.5 | when the hog ended |
+| 1 × FIFO 50, 3 s | 5 | 151.8–157.7 | at once (t+1.1 s, hb stopped at t+1.0 s) |
+| 2 × FIFO 49, 3 s | 3 | 158.4–175.5 | when the hog ended (t+3.4 s) |
+
+`pidin` 1 s into a 2 × FIFO 50 hog (truncated; the snapshot itself runs at 60f, so for that
+instant it preempts one hog):
+
+```
+     pid tid name                         prio STATE          Blocked
+  831511   1 ./teleopd                     10r READY                       <- net
+  831511   2 ./teleopd                     50f READY                       <- control
+  831511   3 ./teleopd                     10r RECEIVE        2            <- resmgr
+162615298   2 data/latbench                 50f RUNNING
+162615298   3 data/latbench                 50f READY
+```
+
+slog2info for that run: `SAFE_STOP reason=hb_timeout detect_us=3023637`, logged after the hog
+ended. With 2 × FIFO 49 the snapshot shows the same `READY` net thread, and control still stops
+on time.
+
+Hypotheses checked:
+
+| Hypothesis | Result |
+|---|---|
+| Equal-priority FIFO does not time-slice: control (50f) waits until a hog blocks or ends | **Confirmed.** Control is `READY` (not `RECEIVE`) during the hog; detection ≈ hog duration; prio 51 gives the same, prio 49 gives 158–175 ms. |
+| The hog must cover both vCPUs | **Confirmed.** One FIFO 50 hog leaves a vCPU free: 151.8–157.7 ms. |
+| The timer pulse is held back | **Rejected as the cause.** Control is `READY`, i.e. the tick pulse was delivered and unblocked it; the thread just gets no CPU. |
+| net (10r) starvation explains the 3 s | **Rejected.** net is starved in the prio 49 runs too, yet control detects in ≤ 175.5 ms; starvation only delays the event to the client (and the client's view of it) until the hog ends. |
+| 3011.9 ms = the 3 s hog duration | **Confirmed.** 3 s hogs → 3001–3045 ms, 5 s hogs → 5004–5040 ms. |
+
+Why the codelab sample showed 150–162 ms with FIFO 50 hogs (section below): its heartbeat
+thread runs at FIFO 30, so it starves too (`pidin` during `-H 50 -N 2`: watchdog 50f `READY`,
+heartbeat 30f `READY`, hogs 50f `RUNNING`/`READY`), and no fresh heartbeat arms a trial during
+the hog window. Measured: `watchdog -n 1 -H 50 -N 2 -T 8` finished trial 1 after 8870 ms wall
+time (857 ms without hogs) and reported 165.22 ms, i.e. a trial taken after the hogs ended. The
+discrepancy came from the sample's design, not from QNX or TCG. Assumption, not re-timed: the
+earlier `-T 40` runs behaved the same way.
+
+Not established: the exact pulse queue contents while control is `READY` (not traced), and
+whether real hardware changes the numbers (only the VM was measured).
 
 ## Deadline change via `/dev/teleop`
 
@@ -99,14 +154,11 @@ Run on the same target: no hog 152.81–159.56 ms (10 trials); hogs FIFO 10: 150
 (10 trials). Hogs FIFO 50, rerun with the hogs covering all 20 trials (`-n 20 -H 50 -T 40`,
 trials last ~18 s; an earlier run with `-T 8` was too short and is discarded):
 `-N 2`: 150.00–162.13 ms; `-N 4`: 150.00–159.08 ms. No `SCHED_FIFO 50 failed` warning was printed.
-The 3011.9 ms of the teleopd FIFO 50 demo (table above) was therefore **not reproduced** by the
-codelab sample. Measured differences: teleopd's demo hogs came from `latbench` (3 s, session
-armed, network path involved), the codelab run uses a single process with no sockets. Not
-measured, so only hypotheses: (a) with `-smp 2` the two hogs may not occupy both vCPUs at all
-times under TCG, leaving a window for the watchdog; (b) the codelab hog threads may block or
-yield periodically; (c) in teleopd the stall came from the 10r net/resmgr threads (below the hogs)
-rather than from the control thread. I did not check the hog threads' state with `pidin` during
-the run. See `docs/codelab/README.md`.
+These FIFO 50 numbers do **not** contradict the teleopd 3011.9 ms: the sample's heartbeat thread
+(FIFO 30) starves together with the watchdog, so no trial is measured while the hogs run; in a
+timed re-run the reported trial happened after the hogs ended (see §Priority-50 investigation
+above). See
+`docs/codelab/README.md`.
 
 ## Earlier short runs
 

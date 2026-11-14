@@ -4,6 +4,7 @@
 > `docs/bench/`) or `docs/QNX_EVIDENCE.md`; no placeholders remain.
 
 Repo: https://github.com/Akar-Samudra-Artifisial/qnx-safestop-teleop (MIT)
+Video: https://youtu.be/asHE8_aUXQs
 Category: Robotics & Medical
 
 ## Tagline (≤200 chars)
@@ -88,9 +89,11 @@ of thinking, not a safety-rated product.
   IPv4 literal or `localhost`, so DNS-rebinding pages are still refused (see CHANGELOG, *Fixed*).
 - **Priority is everything.** A watchdog is only as good as its priority relative to the rest.
   We tested it on purpose: a hog at priority 10 does not disturb the loop (p99 160.82 ms over
-  1021 trials). At the *same* priority (50) the picture is mixed: one teleopd run took 3011.9 ms,
-  but the standalone codelab sample did not reproduce it (150.00–162.13 ms); the cause is still a
-  hypothesis (`docs/BENCH.md`).
+  1021 trials). Two hogs at the *same* priority (50) on both vCPUs hold the control thread `READY`
+  until they end: detection 3001–3045 ms with 3 s hogs, 5004–5040 ms with 5 s hogs (`pidin`
+  traces in `docs/BENCH.md`). One hog, or hogs at 49, leave detection at 152–176 ms. The codelab
+  sample first seemed to disagree, but its own heartbeat thread starved too, so it measured
+  nothing during the hog.
 - **Ordering races.** `arm` and `estop` arrive on different pulses; we stamp receive times on
   the net thread so `estop` always wins.
 - **HAM.** The HAM package was not installed in our SDP at first; supervision/restart status
@@ -105,7 +108,7 @@ of thinking, not a safety-rated product.
 | Baseline, 1000 trials (QEMU TCG) | p50 155.11 / p99 161.01 / max 174.05 ms (2 trials > 170 ms) | `docs/BENCH.md` §Safe-stop detection latency |
 | CPU hog, 2 × `SCHED_RR` 10, 1021 trials | p50 155.11 / p99 160.82 / max 232.55 ms (3 trials > 170 ms) | `docs/BENCH.md` §Safe-stop detection latency |
 | CPU hog, 2 × `SCHED_FIFO` 10 (1 trial) | 158.2 ms | `docs/BENCH.md` §Priority experiments |
-| CPU hog, 2 × `SCHED_FIFO` 50 in teleopd (1 trial, misconfiguration) | 3011.9 ms; not reproduced by the codelab sample (150.00–162.13 ms) | `docs/BENCH.md` §Priority experiments, §Codelab |
+| CPU hog, 2 × `SCHED_FIFO` 50 in teleopd (misconfiguration; 6 trials 3 s, 3 trials 5 s) | 3001–3045 ms / 5004–5040 ms (= hog duration); 1 hog: 152–158 ms | `docs/BENCH.md` §Priority-50 investigation |
 | Physical iPhone: `hb_timeout` | 156.02 ms | `docs/BENCH.md` §Physical device test |
 | Physical iPhone: E-STOP handled; RTT | 0.07–0.18 ms; 7–42 ms | `docs/BENCH.md` §Physical device test |
 | Plant killed → `plant_ok=0`; HAM restart → `plant_ok=1` (n=10) | 38–88 ms; min 544 / median 571.5 / max 626 ms; `plant_lost` → SAFE_STOP latched | `docs/BENCH.md` §Plant failure |
@@ -116,8 +119,10 @@ reproduce the pattern on QNX 8.0 under QEMU on Apple Silicon.
 ## What we learned
 
 - A real-time loop is defined by *who can preempt it*. A hog at priority 10 leaves detection at
-  p99 160.82 ms; the one teleopd run with hogs at priority 50 took 3011.9 ms, though we could not
-  reproduce that in the codelab sample, so we treat it as a warning, not a law.
+  p99 160.82 ms; two hogs at priority 50 delay it by exactly as long as they run (3 s → ~3.0 s,
+  5 s → ~5.0 s), because `SCHED_FIFO` never time-slices between equal priorities.
+- Check what a benchmark can see: our codelab sample "passed" with priority-50 hogs only because
+  its heartbeat thread starved too, so it never measured a trial during the hog.
 - `_NTO_CHF_FIXED_PRIORITY` on the control channel keeps the receiver at priority 50 even when
   a priority-10 thread sends it a pulse.
 - Pulses are a good fit for "tell the real-time thread something happened without ever blocking
@@ -129,7 +134,9 @@ reproduce the pattern on QNX 8.0 under QEMU on Apple Silicon.
 
 ## What's next
 
-- Explain the priority-50 discrepancy (3011.9 ms vs. 150–162 ms in the codelab) with `pidin` traces.
+- Guard against priority misconfiguration: refuse to arm (or log) when another CPU-bound thread
+  runs at ≥ the control priority, and trace the pulse queue during such a stall (`pidin` showed
+  control `READY`; the queue was not traced).
 - Run on real QNX aarch64 hardware (QEMU HVF is blocked today by a GICv3 assert in startup).
 - TLS and stronger pairing for anything beyond a trusted LAN.
 - Real plant (motor controller / AMR) behind the same message interface.
@@ -148,10 +155,9 @@ colima/Docker, `mkqnximage`, React Native, Expo, TypeScript, Python 3 (test clie
   non-commercial license (see `docs/codelab/README.md`, §2–4).
 
 ```sh
-tools/sdp/run.sh /work/tools/sdp/make-image.sh        # QNX 8.0 image
 tools/sdp/run.sh make -C qnx                           # teleopd, simplant, teleopctl, latbench
-QEMU_SERIAL=build/qnx-image/serial.log tools/qemu/run-qemu.sh &
-TELEOP_TOKEN=123456 tools/qemu/deploy.sh
+TELEOP_TOKEN=123456 tools/sdp/run.sh /work/tools/sdp/make-image.sh   # QNX 8.0 image, stack autostarts
+QEMU_SERIAL=build/qnx-image/serial.log tools/qemu/run-qemu.sh &    # no deploy step needed
 python3 tools/wsclient/wsclient.py --token 123456
 cd app && npm install && npx expo start
 ```
@@ -193,7 +199,7 @@ HAM (`qnx/hamreg/hamreg.c` L76–89: `ham_attach`, CONDDEATH, `ham_action_restar
 | 0:35–1:00 | Architecture | "The phone sends a heartbeat at 20 Hz over WebSocket. On QNX 8.0, teleopd's net thread at priority 10 hands messages to a SCHED_FIFO 50 control thread with MsgSendPulse. A 100 Hz timer pulse checks the deadline: 150 ms." | `docs/ARCHITECTURE.md` diagram, zoom on net thread → control thread → simplant. |
 | 1:00–1:30 | Live demo (iPhone) | "Arm, drive, now I switch on simulated link loss. The status strip shows the heartbeat age reaching 150 ms, and the robot ramps to zero and stays latched until I re-arm." Then E-STOP: "estop stops at once." | Screen recording of the app + phone in hand; heartbeat-age bar, SAFE_STOP event, hold-to-re-arm. |
 | 1:30–1:55 | Real QNX proof | "On the target: pidin shows control at 50f, net at 10r. `cat /dev/teleop` shows the live status. teleopctl set-deadline changes it to 200 ms through devctl." | Terminal over ssh into QEMU: `pidin -p teleopd`, `cat /dev/teleop`, `teleopctl set-deadline 200`; highlight the 202.9 ms p50 result from the docs. |
-| 1:55–2:20 | Measurements | "Detection is 150 to 161 ms under QEMU TCG. On a physical iPhone, 156 ms, with E-STOP handled in under 0.2 ms. Over 1000 trials the median is 155 ms and p99 161 ms, and a CPU hog at priority 10 does not change that. The rule: the safety thread must sit strictly above every CPU-bound thread. When we put a hog at the same priority once, detection took 3 seconds; we could not reproduce that in a smaller test, so we keep it as a warning." | Latency panel in the app; bench table; side-by-side bar (prio 10 vs prio 50). Optional: show the 1000-trial table from `docs/BENCH.md`. |
+| 1:55–2:20 | Measurements | "Detection is 150 to 161 ms under QEMU TCG. On a physical iPhone, 156 ms, with E-STOP handled in under 0.2 ms. Over 1000 trials the median is 155 ms and p99 161 ms, and a CPU hog at priority 10 does not change that. The rule: the safety thread must sit strictly above every CPU-bound thread. Put two hogs at the same priority and detection waits for them: about 3 seconds with a 3-second hog, 5 seconds with a 5-second one, and pidin shows the control thread ready but never running." | Latency panel in the app; bench table; side-by-side bar (prio 10 vs prio 50). Optional: show the 1000-trial table from `docs/BENCH.md`. |
 | 2:20–2:40 | How it was built, honestly | "QNX SDP has no Mac host, so we ran it in a Linux container and booted QEMU on Apple Silicon. We used AI assistants for drafting code and docs; we reviewed and measured everything ourselves. We also wrote a codelab so you can reproduce the pattern." | Terminal: `make -C qnx`; flash of `docs/codelab/`. |
 | 2:40–2:50 | Close | "qnx-safestop-teleop: a bounded-latency stop for remote robots, open source under MIT." | Repo URL, tagline, logo. |
 
@@ -208,7 +214,7 @@ Recording notes: do not show the pairing token or any password; HAM restart may 
 - [x] iPhone and hog numbers are in `docs/BENCH.md`.
 - [x] `docs/QNX_EVIDENCE.md` line numbers checked against the final source (ChannelCreate L1220).
 - [ ] Tagline ≤ 200 characters (count it).
-- [ ] Video: public on YouTube, < 3:00, no secrets on screen; paste the URL.
+- [x] Video: public on YouTube, < 3:00, no secrets on screen; paste the URL.
 - [x] Build instructions present: QNX 8.0, aarch64le, `qcc` in the SDP container.
 - [ ] QNX evidence table pasted, each reference opens on GitHub.
 - [ ] AI-use paragraph matches what the team actually did.

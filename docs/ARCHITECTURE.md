@@ -85,12 +85,12 @@ refuses `arm` until the plant is back, so a restarted plant never resumes motion
 
 ### HAM supervision (`qnx/hamreg`)
 `ham` (High Availability Manager, SDP package `com.qnx.qnx800.target.os_services.ham`) runs
-from `/data` (copied by `deploy.sh` with `libham.so.2`; it is not in the IFS image, so no
-image rebuild). `hamreg` asks HAM to start simplant (`ham_attach` with pid 0) and adds a
+from `/data` with `libham.so.2` (put in the data partition by `make-image.sh` and started at
+boot by `teleop-start.sh`, or copied by `deploy.sh`; it is not in the IFS). `hamreg` asks HAM to start simplant (`ham_attach` with pid 0) and adds a
 CONDDEATH condition with three re-armed actions: notify pulse to hamreg, `waitfor` 100 ms,
 `restart`. HAM has no restart limit, so hamreg counts the pulses and calls
 `ham_detach_name` after more than 5 deaths in 60 s (`-d`, `-n`, `-w`). Stop HAM with
-`hamctrl -stop` (the documented way; `deploy.sh` does this).
+`hamctrl -stop` (the documented way; `teleop-start.sh` does this before a restart).
 
 ### /dev/teleop (resource manager in teleopd)
 - **resmgr thread**, `SCHED_RR` 10: `resmgr_attach("/dev/teleop")` with the default

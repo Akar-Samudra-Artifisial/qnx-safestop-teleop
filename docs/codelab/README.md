@@ -203,10 +203,12 @@ core). Hogs stop by themselves after `-T` seconds.
 is not used. `SCHED_FIFO 50` was accepted (no warning), but I did not confirm with `pidin` that
 the hogs kept running at 50 during the trials. In the full project, two `SCHED_FIFO` 50 hogs
 delayed detection to 3011.9 ms (`docs/BENCH.md`), so the sample and teleopd disagree on the same
-VM (`-smp 2`, so two hogs can occupy both vCPUs). Why is **not established**. Hypotheses, untested:
-the codelab hogs get descheduled or yield under TCG; the watchdog gets a vCPU while the hogs are
-being switched; in teleopd the delay came from lower-priority threads, not the control thread.
-Treat it as an open exercise: check with `pidin` during the run and vary `-N`.
+VM (`-smp 2`, so two hogs can occupy both vCPUs). Checked later with `pidin`
+(`docs/BENCH.md` §Priority-50 investigation): this sample's heartbeat thread (FIFO 30) starves
+too, so no trial is armed while the hogs run, and the measured trials all come after the hogs
+end (`-n 1 -H 50 -N 2 -T 8` finished trial 1 after 8870 ms wall time, 857 ms without hogs). The
+watchdog itself sits `READY` for the whole hog, as in teleopd. Exercise: move the heartbeat above
+the hogs (e.g. `HB_PRIO` 55) and predict the detection time before you run it (not run here).
 
 The general point still holds: a watchdog is only as reliable as its priority is high relative
 to everything else. Real systems put the watchdog above all work it supervises.
