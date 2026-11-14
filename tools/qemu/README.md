@@ -19,7 +19,7 @@ ssh -i build/qnx-image/ssh/id_ed25519 -o IdentitiesOnly=yes \
 
 | Host | Guest |
 | --- | --- |
-| `0.0.0.0:2222` | `22` (sshd, login root dengan key proyek) |
+| `127.0.0.1:2222` | `22` (sshd, login root dengan key proyek) |
 | `0.0.0.0:8080` | `8080` (teleopd WebSocket) |
 
 Argumen mengikuti `mkqnximage` `qemu/runimage` (aarch64): `-kernel output/ifs.bin`,
@@ -28,7 +28,11 @@ Argumen mengikuti `mkqnximage` `qemu/runimage` (aarch64): `-kernel output/ifs.bi
 net user-mode (bukan bridge).
 
 Env: `QEMU_ACCEL` (`tcg` default | `hvf`), `QEMU_MACHINE`, `QEMU_MEM` (1G), `QEMU_SMP` (2),
-`QEMU_SERIAL` (`stdio` | path log), `QEMU_HOSTFWD_ADDR` (port 8080, default 0.0.0.0 agar HP di LAN bisa connect), `QEMU_SSH_FWD_ADDR` (port 2222, default 127.0.0.1: SSH root hanya dari Mac ini), `QNX_IMAGE_DIR`.
+`QEMU_SERIAL` (`stdio` | path log), `QEMU_HOSTFWD_ADDR` (port 8080, default 0.0.0.0 agar HP di LAN bisa connect), `QEMU_SSH_FWD_ADDR` (port 2222, default 127.0.0.1: SSH root hanya dari Mac ini), `QNX_IMAGE_DIR`,
+`QEMU_SSH_PORT` (port host → guest 22, default 2222) dan `QEMU_TELEOP_PORT` (port host → guest 8080,
+default 8080) untuk menjalankan VM kedua tanpa bentrok, mis.
+`QEMU_SSH_PORT=2223 QEMU_TELEOP_PORT=8081 tools/qemu/run-qemu.sh`, lalu
+`QNX_SSH_PORT=2223 tools/qemu/deploy.sh` dan `wsclient.py --port 8081`.
 
 ## hvf belum bisa (2026-11-14, QEMU 11.1.3)
 

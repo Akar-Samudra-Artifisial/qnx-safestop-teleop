@@ -31,7 +31,9 @@ Concepts: `ChannelCreate`, `ConnectAttach`, `timer_create` with `SIGEV_PULSE`,
 - `brew install colima docker qemu`
 - ~60 GiB free disk (colima VM) and 8 GiB RAM for the VM.
 
-Clone the project (it contains the scripts used below):
+Clone the project (it contains the scripts used below) somewhere under your home directory:
+colima only shares `$HOME` with its VM, so a clone in `/tmp` shows up as an empty `/work`
+inside the container (`tools/sdp/run.sh` refuses to start in that case).
 
 ```sh
 git clone <this repository> qnx-safestop-teleop && cd qnx-safestop-teleop
@@ -51,13 +53,14 @@ cd tools/sdp
 ```
 
 `run.sh` mounts `~/qnx` as `/root/qnx` (SDP, license) and the repo as `/work`
-(`tools/sdp/run.sh:46-48`), and sources `qnxsdp-env.sh` before every command
-(`tools/sdp/run.sh:42-51`), so `qcc` is always on the PATH.
+(`tools/sdp/run.sh:60-62`), and sources `qnxsdp-env.sh` before every command
+(`tools/sdp/run.sh:51-66`), so `qcc` is always on the PATH.
 
 `install-qsc.sh` asks for your myQNX login (password hidden, kept only in a chmod-600 temp
 file, `install-qsc.sh:40-48`) and the license key, then installs the `com.qnx.qnx800` baseline
-and the extra packages `qemuvirt`, `driver.virtio.devb`, `driver.virtio.startup` and
-`net.openSSH` (`install-qsc.sh:24`). **Running it accepts the QSC EULA** (`--agree`,
+and the extra packages `qemuvirt`, `driver.virtio.devb`, `driver.virtio.startup`,
+`net.openSSH` and `os_services.ham` (`install-qsc.sh:25`; HAM is only needed by the full
+project, not by this codelab). **Running it accepts the QSC EULA** (`--agree`,
 `install-qsc.sh:35`). Check:
 
 ```sh
@@ -89,11 +92,14 @@ tools/qemu/run-qemu.sh          # serial console on stdio, Ctrl-A X quits QEMU
 ```
 
 It uses `qemu-system-aarch64` with `-accel tcg -cpu cortex-a57`, 2 vCPUs, 1 GiB, user-mode
-networking with `localhost:2222 -> 22` (`tools/qemu/run-qemu.sh:48-56`). When the `#` prompt
-appears, from a second terminal:
+networking with `localhost:2222 -> 22` (`tools/qemu/run-qemu.sh:54-63`; another free host
+port: `QEMU_SSH_PORT=2223`, then use `-p 2223`/`-P 2223` below). When the `#` prompt
+appears, from a second terminal (every image build regenerates the host key, so skip
+`known_hosts`; `IdentitiesOnly` avoids "Too many authentication failures" with a loaded agent):
 
 ```sh
-ssh -i build/qnx-image/ssh/id_ed25519 -p 2222 -o StrictHostKeyChecking=no root@localhost 'uname -a'
+ssh -i build/qnx-image/ssh/id_ed25519 -p 2222 -o IdentitiesOnly=yes \
+  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@localhost 'uname -a'
 ```
 
 > **Honest note: why TCG and not hvf?** On Apple Silicon, hvf would give near-native speed,
@@ -101,7 +107,7 @@ ssh -i build/qnx-image/ssh/id_ed25519 -p 2222 -o StrictHostKeyChecking=no root@l
 > `gic_v3.c:966 ASSERT((use_memory_mapped_callouts == 0) || (gicc_paddr_base != ...))`
 > (HVF only offers GICv3 and refuses GICv2). We therefore use TCG (software CPU emulation):
 > boots fine, but is slower and timers jitter more. `QEMU_ACCEL=hvf tools/qemu/run-qemu.sh`
-> keeps the experiment reachable (`run-qemu.sh:29-36`). Expect numbers from this codelab to be
+> keeps the experiment reachable (`run-qemu.sh:36-46`). Expect numbers from this codelab to be
 > *worse* than real hardware.
 
 ## 6. Step 4 - The minimal watchdog (20 min)
@@ -154,8 +160,10 @@ cd tools/sdp
 ./run.sh make -C /work/docs/codelab/watchdog           # qcc -Vgcc_ntoaarch64le -Wall -Wextra
 cd ../..
 KEY=build/qnx-image/ssh/id_ed25519
-scp -i $KEY -P 2222 -o StrictHostKeyChecking=no docs/codelab/watchdog/watchdog root@localhost:/tmp/
-ssh -i $KEY -p 2222 root@localhost '/tmp/watchdog -n 10'
+scp -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  -P 2222 docs/codelab/watchdog/watchdog root@localhost:/tmp/
+ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  -p 2222 root@localhost '/tmp/watchdog -n 10'
 ```
 
 Our build result: `qcc` compiles with zero warnings and produces an

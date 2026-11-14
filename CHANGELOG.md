@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - App: hb_timeout Latency panel (teleopd `stats`, local fallback), remembers the last
   host/token (host in AsyncStorage, token in SecureStore), PLANT DOWN banner.
 - Standalone QNX deadline-watchdog codelab (`docs/codelab`) with a compilable sample.
+- `run-qemu.sh`: `QEMU_SSH_PORT` / `QEMU_TELEOP_PORT` choose the host ports (default 2222 /
+  8080), so a second VM can run next to the first one.
+- `tools/sdp/run.sh` refuses a repo or QNX home outside `$HOME` (colima mounts only
+  `$HOME`, so it would otherwise run against an empty `/work`); `QNX_SKIP_MOUNT_CHECK=1`
+  overrides.
+- README "Reproduce in 7 steps" (prerequisites, SDP packages incl. HAM, alternate ports,
+  app checks, mock smoke, codelab), verified from a fresh clone.
 
 ### Changed
 - teleopd enters SAFE_STOP (event `plant_lost`) when the plant connection fails while
