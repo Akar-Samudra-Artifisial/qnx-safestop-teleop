@@ -17,7 +17,7 @@ all: $(BIN)
 $(BIN): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-%.o: %.c ../common/ws.h ../common/json.h ../common/proto.h
+%.o: %.c ../common/ws.h ../common/json.h ../common/proto.h ../common/teleop_dcmd.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:

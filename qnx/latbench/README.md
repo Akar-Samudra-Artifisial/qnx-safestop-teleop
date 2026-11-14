@@ -1,6 +1,8 @@
-# latbench (stretch)
+# latbench
 
-Measures control-loop wake-up latency (p50 / p99 / max) with and without a CPU hog.
-Results go to [docs/BENCH.md](../../docs/BENCH.md).
+CPU hog for the safe-stop latency bench: `latbench -p <prio> -s <seconds> [-n threads] [-r]`
+starts one busy-loop thread per online CPU at `SCHED_FIFO` (or `SCHED_RR` with `-r`)
+priority `<prio>`; the threads stop by themselves after `<seconds>`.
 
-Status: placeholder — no source yet.
+Start it with `tools/fault/cpu-hog.sh`, measure with `tools/wsclient/wsclient.py --bench N`.
+Results: [docs/BENCH.md](../../docs/BENCH.md).

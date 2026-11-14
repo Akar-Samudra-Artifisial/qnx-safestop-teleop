@@ -8,6 +8,8 @@
  *   control (SCHED_FIFO 50)  Blocks in MsgReceive on a fixed-priority channel. A 100 Hz
  *                            timer_create(CLOCK_MONOTONIC, SIGEV_PULSE) tick checks heartbeat
  *                            age, ramps velocity and forwards it to simplant (MsgSend).
+ *   resmgr  (SCHED_RR 10)    /dev/teleop (0640 root): read -> status text, devctl ->
+ *                            set deadline / estop (qnx/common/teleop_dcmd.h). Optional.
  *
  * Modes: DISARMED -(arm, fresh hb)-> ARMED -(hb age > deadline | estop | client lost)-> SAFE_STOP
  *        SAFE_STOP stays latched until the next accepted arm. estop zeroes velocity at once;
@@ -30,14 +32,18 @@
 #include <time.h>
 #include <unistd.h>
 #include <netinet/in.h>
+/* sys/iofunc.h first: it sets RESMGR_OCB_T to iofunc_ocb_t for sys/dispatch.h. */
+#include <sys/iofunc.h>
 #include <sys/dispatch.h>
 #include <sys/neutrino.h>
 #include <sys/slog2.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 
 #include "json.h"
 #include "proto.h"
 #include "ws.h"
+#include "teleop_dcmd.h"
 
 #define CONTROL_PRIO        50
 #define NET_PRIO            10
@@ -103,7 +109,31 @@ static struct {
 
 static int g_chid = -1;
 static int g_wake_pipe[2] = { -1, -1 };
-static int64_t g_deadline_ns = 150000000LL;
+/* Written by main and the /dev/teleop devctl, read by the control/net threads. */
+static _Atomic int64_t g_deadline_ns = 150000000LL;
+
+/* hb_timeout detect_us history (ring buffer, newest STATS_RING samples) for the
+ * "stats" message and /dev/teleop. Guarded by stats.mtx (priority inheritance). */
+#define STATS_RING          1024
+#define STATS_NBUCKET       9
+/* Bucket upper bounds (µs, inclusive); the last bucket is +inf (JSON le_us null). */
+static const int64_t STATS_LE_US[STATS_NBUCKET - 1] = {
+    150000, 152000, 154000, 156000, 158000, 160000, 165000, 170000,
+};
+static struct {
+    pthread_mutex_t mtx;
+    uint32_t n;                 /* samples stored, <= STATS_RING */
+    uint32_t head;              /* next write index */
+    uint64_t total;             /* hb_timeout events since start */
+    int64_t us[STATS_RING];
+} stats;
+
+typedef struct {
+    uint32_t n;
+    uint64_t total;
+    int64_t p50_us, p99_us, max_us;     /* -1 when n == 0 */
+    uint32_t count[STATS_NBUCKET];
+} stats_summary_t;
 static bool g_verbose;
 static slog2_buffer_t g_log;
 static char g_token[TOKEN_MAX + 1];
@@ -208,6 +238,57 @@ static mode_t_ current_mode(void)
 
 /* ------------------------------------------------------------------ control thread */
 
+static void stats_add(int64_t us)
+{
+    pthread_mutex_lock(&stats.mtx);
+    stats.us[stats.head] = us;
+    stats.head = (stats.head + 1) % STATS_RING;
+    if (stats.n < STATS_RING)
+        stats.n++;
+    stats.total++;
+    pthread_mutex_unlock(&stats.mtx);
+}
+
+static int cmp_i64(const void *a, const void *b)
+{
+    int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+    return (x > y) - (x < y);
+}
+
+/* Nearest-rank percentile of sorted v[0..n-1], p in (0,1]. */
+static int64_t pct(const int64_t *v, uint32_t n, double p)
+{
+    uint32_t k = (uint32_t)ceil(p * n);
+    return v[k ? k - 1 : 0];
+}
+
+/* Copy the ring under the lock, sort outside it. Callers: net and resmgr threads. */
+static void stats_get(stats_summary_t *s)
+{
+    static __thread int64_t v[STATS_RING];      /* per-thread scratch, off the stack */
+    uint32_t i, b;
+
+    memset(s, 0, sizeof(*s));
+    pthread_mutex_lock(&stats.mtx);
+    s->n = stats.n;
+    s->total = stats.total;
+    memcpy(v, stats.us, s->n * sizeof(v[0]));  /* order is irrelevant: sorted below */
+    pthread_mutex_unlock(&stats.mtx);
+
+    s->p50_us = s->p99_us = s->max_us = -1;
+    if (s->n == 0)
+        return;
+    qsort(v, s->n, sizeof(v[0]), cmp_i64);
+    s->p50_us = pct(v, s->n, 0.50);
+    s->p99_us = pct(v, s->n, 0.99);
+    s->max_us = v[s->n - 1];
+    for (i = 0; i < s->n; i++) {
+        for (b = 0; b < STATS_NBUCKET - 1 && v[i] > STATS_LE_US[b]; b++)
+            ;
+        s->count[b]++;
+    }
+}
+
 typedef struct {
     mode_t_ mode;
     int64_t last_cmd_seq;       /* reset per connection */
@@ -296,9 +377,11 @@ static void on_tick(ctl_t *c)
     pthread_mutex_unlock(&in.mtx);
 
     if (c->mode == MODE_ARMED) {
-        if (hb_rx == 0 || t - hb_rx > g_deadline_ns)
+        if (hb_rx == 0 || t - hb_rx > g_deadline_ns) {
             enter_safe_stop(c, "hb_timeout", hb_rx ? (t - hb_rx) / 1000 : -1);
-        else if (t - c->target_ns > CMD_HOLD_NS)
+            if (hb_rx)
+                stats_add((t - hb_rx) / 1000);
+        } else if (t - c->target_ns > CMD_HOLD_NS)
             c->target_v = c->target_w = 0;
     }
     c->v = ramp(c->v, c->target_v, A_LIN * dt);
@@ -382,9 +465,11 @@ static void on_estop(ctl_t *c)
     pthread_mutex_unlock(&in.mtx);
 
     t = now_ns();
-    enter_safe_stop(c, "estop", (t - rx) / 1000);
-    /* Operator-commanded stop: zero the setpoint now instead of ramping (ARCHITECTURE.md). */
+    /* Operator-commanded stop: zero the setpoint now instead of ramping (ARCHITECTURE.md).
+     * Published before the event wakes net, so no state sent after the event shows v != 0. */
     c->v = c->w = 0;
+    publish(c, hb_rx);
+    enter_safe_stop(c, "estop", (t - rx) / 1000);
     plant_exchange(c, t);
     publish(c, hb_rx);
 }
@@ -464,6 +549,7 @@ typedef struct {
     ws_conn_t conn;
     double min_offset_ms;       /* min(server_ms - client_ts) for this connection */
     bool have_offset;
+    bool stats_req;             /* "stats_req" received: reply from net_loop */
     int rtt_ms;
     int64_t next_state, next_ping;
     int64_t log_msg_ns, log_pulse_ns, log_conn_ns;
@@ -554,6 +640,8 @@ static void on_text(void *ctx, const char *text, size_t len)
         pthread_mutex_unlock(&in.mtx);
         /* Control priority: queued ahead of any pending net pulses. */
         pulse_once(n, CONTROL_PRIO, PULSE_ESTOP);
+    } else if (strcmp(type, "stats_req") == 0) {
+        n->stats_req = true;
     } else {
         drop_msg(n, "unknown message type");
     }
@@ -593,6 +681,32 @@ static int send_state(net_t *n)
              (long long)seq_ack, out.pose.x, out.pose.y, out.pose.theta, out.v, out.w,
              MODE_NAME[out.mode], (long long)hb_age, n->rtt_ms, out.plant_ok ? "true" : "false");
     pthread_mutex_unlock(&out.mtx);
+    return send_text(n->conn.fd, buf);
+}
+
+/* {"type":"stats",...}: hb_timeout detect_us histogram, last bucket le_us null (+inf). */
+static int send_stats(net_t *n)
+{
+    char buf[768];
+    stats_summary_t s;
+    size_t len;
+    int b;
+
+    stats_get(&s);
+    len = (size_t)snprintf(buf, sizeof(buf),
+                           "{\"type\":\"stats\",\"n\":%u,\"p50_us\":%lld,\"p99_us\":%lld,\"max_us\":%lld,"
+                           "\"buckets\":[",
+                           s.n, (long long)s.p50_us, (long long)s.p99_us, (long long)s.max_us);
+    for (b = 0; b < STATS_NBUCKET && len < sizeof(buf); b++) {
+        if (b < STATS_NBUCKET - 1)
+            len += (size_t)snprintf(buf + len, sizeof(buf) - len, "%s{\"le_us\":%lld,\"count\":%u}",
+                                    b ? "," : "", (long long)STATS_LE_US[b], s.count[b]);
+        else
+            len += (size_t)snprintf(buf + len, sizeof(buf) - len, ",{\"le_us\":null,\"count\":%u}]}",
+                                    s.count[b]);
+    }
+    if (len >= sizeof(buf))         /* cannot happen with 9 buckets; never send truncated JSON */
+        return 0;
     return send_text(n->conn.fd, buf);
 }
 
@@ -712,6 +826,7 @@ static void admit(net_t *n, int fd, const ws_request_t *r)
     n->conn.fd = fd;
     n->conn.len = 0;
     n->have_offset = false;
+    n->stats_req = false;
     n->rtt_ms = -1;
     n->next_state = n->next_ping = now_ns();
     pulse(n, NET_PRIO, PULSE_CLIENT);
@@ -829,6 +944,11 @@ static void net_loop(int lfd)
             if (have && n.conn.fd != -1 && send_text(n.conn.fd, buf) != 0)
                 drop_client(&n, "send event", true);
         }
+        if (n.stats_req) {
+            n.stats_req = false;
+            if (n.conn.fd != -1 && send_stats(&n) != 0)
+                drop_client(&n, "send stats", true);
+        }
 
         t = now_ns();
         if (n.conn.fd != -1 && t >= n.next_state) {
@@ -842,6 +962,166 @@ static void net_loop(int lfd)
                 drop_client(&n, "send ping", true);
         }
     }
+}
+
+/* ------------------------------------------------------------------ /dev/teleop resmgr */
+
+static resmgr_connect_funcs_t rm_connect_funcs;
+static resmgr_io_funcs_t rm_io_funcs;
+static iofunc_attr_t rm_attr;
+static int rm_coid = -1;        /* side channel to the control channel (estop pulse) */
+
+static int rm_status_text(char *buf, size_t len)
+{
+    stats_summary_t s;
+    int64_t t = now_ns(), hb_age;
+    int n;
+
+    stats_get(&s);
+    pthread_mutex_lock(&out.mtx);
+    hb_age = out.hb_rx_ns ? (t - out.hb_rx_ns) / 1000000 : -1;
+    n = snprintf(buf, len,
+                 "mode=%s\nhb_age_ms=%lld\ndeadline_ms=%lld\npose_x=%.4f\npose_y=%.4f\npose_theta=%.4f\n"
+                 "plant_ok=%d\nevents=%u\nhb_timeouts=%llu\ndetect_n=%u\ndetect_p50_us=%lld\n"
+                 "detect_p99_us=%lld\ndetect_max_us=%lld\n",
+                 MODE_NAME[out.mode], (long long)hb_age, (long long)(g_deadline_ns / 1000000),
+                 out.pose.x, out.pose.y, out.pose.theta, out.plant_ok ? 1 : 0, out.event_count,
+                 (unsigned long long)s.total, s.n, (long long)s.p50_us, (long long)s.p99_us,
+                 (long long)s.max_us);
+    pthread_mutex_unlock(&out.mtx);
+    return n < 0 ? 0 : n >= (int)len ? (int)len - 1 : n;
+}
+
+/* read: the status text is rendered when a read starts at offset 0; later reads of the same
+ * open (offset > 0) continue through that snapshot so the pieces stay consistent. The
+ * snapshot is shared by all opens (one resmgr thread): interleaved multi-read readers can
+ * see another open's snapshot, single-read readers like cat cannot. */
+static int rm_read(resmgr_context_t *ctp, io_read_t *msg, RESMGR_OCB_T *ocb)
+{
+    static char buf[512];       /* single resmgr thread; must outlive this call (reply iov) */
+    static int len;
+    int status = iofunc_read_verify(ctp, msg, ocb, NULL);
+    size_t nbytes = 0;
+
+    if (status != EOK)
+        return status;
+    if ((msg->i.xtype & _IO_XTYPE_MASK) != _IO_XTYPE_NONE)
+        return ENOSYS;
+    if (ocb->offset < 0)
+        return EINVAL;
+    if (ocb->offset == 0)
+        len = rm_status_text(buf, sizeof(buf));
+    if (ocb->offset < len) {
+        nbytes = (size_t)(len - ocb->offset);
+        if (nbytes > msg->i.nbytes)
+            nbytes = msg->i.nbytes;
+    }
+    _IO_SET_READ_NBYTES(ctp, nbytes);
+    if (nbytes == 0)
+        return _RESMGR_NPARTS(0);
+    ocb->attr->flags |= IOFUNC_ATTR_ATIME;
+    status = (int)ocb->offset;
+    ocb->offset += (off_t)nbytes;
+    return _RESMGR_PTR(ctp, buf + status, nbytes);
+}
+
+/* devctl: both commands change robot state, so the node must be open for writing
+ * (node mode 0640 root:root -> root only). */
+static int rm_devctl(resmgr_context_t *ctp, io_devctl_t *msg, RESMGR_OCB_T *ocb)
+{
+    int status = iofunc_devctl_default(ctp, msg, ocb);
+    int32_t ms;
+
+    if (status != _RESMGR_DEFAULT)
+        return status;
+    switch (msg->i.dcmd) {
+    case DCMD_TELEOP_SET_DEADLINE:
+        if (!(ocb->ioflag & _IO_FLAG_WR))
+            return EBADF;
+        if (ctp->size < sizeof(msg->i) + sizeof(ms))
+            return EBADMSG;
+        memcpy(&ms, _DEVCTL_DATA(msg->i), sizeof(ms));
+        if (ms < TELEOP_DEADLINE_MIN_MS || ms > TELEOP_DEADLINE_MAX_MS)
+            return EINVAL;
+        g_deadline_ns = (int64_t)ms * 1000000LL;
+        logf_(SLOG2_WARNING, "teleopd: hb deadline set to %d ms via %s", (int)ms, TELEOP_DEV_PATH);
+        break;
+    case DCMD_TELEOP_ESTOP:
+        if (!(ocb->ioflag & _IO_FLAG_WR))
+            return EBADF;
+        pthread_mutex_lock(&in.mtx);
+        in.estop_rx_ns = now_ns();
+        pthread_mutex_unlock(&in.mtx);
+        if (!(atomic_fetch_or(&g_pending, PENDING_BIT(PULSE_ESTOP)) & PENDING_BIT(PULSE_ESTOP))
+            && MsgSendPulse(rm_coid, CONTROL_PRIO, PULSE_ESTOP, 0) == -1) {
+            atomic_fetch_and(&g_pending, ~PENDING_BIT(PULSE_ESTOP));
+            logf_(SLOG2_ERROR, "teleopd: %s estop pulse failed: %s", TELEOP_DEV_PATH, strerror(errno));
+            return EIO;
+        }
+        logf_(SLOG2_WARNING, "teleopd: estop via %s", TELEOP_DEV_PATH);
+        break;
+    case DCMD_TELEOP_RESET_STATS:
+        if (!(ocb->ioflag & _IO_FLAG_WR))
+            return EBADF;
+        pthread_mutex_lock(&stats.mtx);
+        stats.n = stats.head = 0;
+        pthread_mutex_unlock(&stats.mtx);
+        logf_(SLOG2_INFO, "teleopd: detect stats reset via %s", TELEOP_DEV_PATH);
+        break;
+    default:
+        return ENOSYS;
+    }
+    memset(&msg->o, 0, sizeof(msg->o));
+    return _RESMGR_PTR(ctp, &msg->o, sizeof(msg->o));
+}
+
+/* Optional: the safety function never depends on this thread; failures are logged only. */
+static void *resmgr_main(void *arg)
+{
+    resmgr_attr_t ra;
+    dispatch_t *dpp;
+    dispatch_context_t *ctp;
+
+    (void)arg;
+    set_sched(SCHED_RR, NET_PRIO, "resmgr");
+    rm_coid = ConnectAttach(0, 0, g_chid, _NTO_SIDE_CHANNEL, 0);
+    dpp = dispatch_create_channel(-1, DISPATCH_FLAG_NOLOCK);
+    if (rm_coid == -1 || dpp == NULL) {
+        logf_(SLOG2_ERROR, "teleopd: %s setup failed: %s", TELEOP_DEV_PATH, strerror(errno));
+        return NULL;
+    }
+    memset(&ra, 0, sizeof(ra));
+    ra.nparts_max = 1;
+    ra.msg_max_size = 2048;
+    iofunc_func_init(_RESMGR_CONNECT_NFUNCS, &rm_connect_funcs, _RESMGR_IO_NFUNCS, &rm_io_funcs);
+    rm_io_funcs.read = rm_read;
+    rm_io_funcs.devctl = rm_devctl;
+    iofunc_attr_init(&rm_attr, S_IFCHR | 0640, NULL, NULL);
+    rm_attr.uid = 0;
+    rm_attr.gid = 0;
+    if (resmgr_attach(dpp, &ra, TELEOP_DEV_PATH, _FTYPE_ANY, 0, &rm_connect_funcs, &rm_io_funcs, &rm_attr)
+        == -1) {
+        logf_(SLOG2_ERROR, "teleopd: resmgr_attach(%s) failed: %s", TELEOP_DEV_PATH, strerror(errno));
+        return NULL;
+    }
+    ctp = dispatch_context_alloc(dpp);
+    if (ctp == NULL) {
+        logf_(SLOG2_ERROR, "teleopd: dispatch_context_alloc failed: %s", strerror(errno));
+        return NULL;
+    }
+    logf_(SLOG2_INFO, "teleopd: %s ready", TELEOP_DEV_PATH);
+    for (;;) {
+        dispatch_context_t *next = dispatch_block(ctp);
+        if (next == NULL) {
+            if (errno == EINTR)
+                continue;
+            logf_(SLOG2_ERROR, "teleopd: %s dispatch_block failed: %s", TELEOP_DEV_PATH, strerror(errno));
+            return NULL;
+        }
+        ctp = next;
+        dispatch_handler(ctp);
+    }
+    return NULL;
 }
 
 /* 6-digit pairing token from the kernel entropy pool. 0 or -1. */
@@ -888,7 +1168,7 @@ int main(int argc, char **argv)
 {
     pthread_attr_t attr;
     struct sched_param sp = { .sched_priority = CONTROL_PRIO };
-    pthread_t ctl;
+    pthread_t ctl, rm;
     int opt, lfd, rc;
     long port = 8080, deadline_ms = 150;
 
@@ -930,7 +1210,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "teleopd: cannot read /dev/urandom for the pairing token (use -t)\n");
         return 1;
     }
-    if ((rc = init_pi_mutex(&in.mtx)) != 0 || (rc = init_pi_mutex(&out.mtx)) != 0) {
+    if ((rc = init_pi_mutex(&in.mtx)) != 0 || (rc = init_pi_mutex(&out.mtx)) != 0
+        || (rc = init_pi_mutex(&stats.mtx)) != 0) {
         logf_(SLOG2_ERROR, "teleopd: mutex init failed: %s", strerror(rc));
         return 1;
     }
@@ -964,13 +1245,14 @@ int main(int argc, char **argv)
         return 1;
     }
     pthread_attr_destroy(&attr);
+    rc = pthread_create(&rm, NULL, resmgr_main, NULL);
+    if (rc != 0)
+        logf_(SLOG2_ERROR, "teleopd: pthread_create(resmgr) failed: %s", strerror(rc));
 
     set_sched(SCHED_RR, NET_PRIO, "net");
     /* The operator types this into the app; printed even without -v. */
     printf("teleopd: pairing token %s (connect ws://<host>:%ld/?t=%s)\n", g_token, port, g_token);
     fflush(stdout);
-    if (g_log)
-        slog2f(g_log, 0, SLOG2_INFO, "teleopd: pairing token %s", g_token);
     logf_(SLOG2_INFO, "teleopd: listening on :%ld, hb deadline %ld ms, tick %d Hz, origin %s", port,
           deadline_ms, TICK_HZ, g_origin[0] ? g_origin : "(none)");
     net_loop(lfd);
