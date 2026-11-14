@@ -11,18 +11,25 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import BrandMark from '../components/BrandMark';
 import EventList from '../components/EventList';
 import HoldButton from '../components/HoldButton';
 import Joystick from '../components/Joystick';
 import LatencyPanel from '../components/LatencyPanel';
+import ModeHero from '../components/ModeHero';
+import Segmented, { type SegmentOption } from '../components/Segmented';
 import StatusStrip from '../components/StatusStrip';
 import TopDownMap from '../components/TopDownMap';
 import { statsFromSamples } from '../net/stats';
 import { buildLinkUrl, type RejectReason } from '../net/teleopLink';
 import { useTeleopLink } from '../net/useTeleopLink';
-import { colors, font, radius, space, touchMin } from '../theme';
+import { colors, font, radius, space, touchSecondary } from '../theme';
 
 const STATS_POLL_MS = 2000;
+/** Below this window height (iPhone SE: 667) the layout tightens. */
+const COMPACT_H = 720;
+
+type Panel = 'map' | 'latency' | 'events';
 
 interface TeleopScreenProps {
   /** host:port of teleopd. */
@@ -42,12 +49,14 @@ export default function TeleopScreen({ address, token, onExit, onRejected }: Tel
     if (snap.status === 'open') everOpened.current = true;
     else if (snap.status === 'rejected' && !everOpened.current) onRejected(snap.rejectReason ?? 'unknown');
   }, [snap.status, snap.rejectReason, onRejected]);
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
+  const compact = height < COMPACT_H;
   const [mapSize, setMapSize] = useState(0);
 
   const open = snap.status === 'open';
   const st = snap.state;
-  const joySize = Math.min(220, Math.max(150, (width - space.lg * 3) * 0.5));
+  const mode = st?.mode ?? null;
+  const joySize = Math.round(Math.min(200, Math.max(128, (width - space.lg * 3) * (compact ? 0.42 : 0.48))));
 
   const onMapLayout = useCallback((e: LayoutChangeEvent) => {
     const { width: w, height: h } = e.nativeEvent.layout;
@@ -63,26 +72,38 @@ export default function TeleopScreen({ address, token, onExit, onRejected }: Tel
   const onReconnect = useCallback(() => link.connect(), [link]);
   const onLinkLoss = useCallback((on: boolean) => link.setLinkLossSim(on), [link]);
 
-  const [showLatency, setShowLatency] = useState(false);
-  const toggleLatency = useCallback(() => setShowLatency((s) => !s), []);
-  // Poll teleopd for its histogram every 2 s while the panel is visible.
+  const [panel, setPanel] = useState<Panel>('map');
+  // Poll teleopd for its histogram every 2 s while the latency tab is visible.
   useEffect(() => {
-    if (!showLatency || !open) return;
+    if (panel !== 'latency' || !open) return;
     link.requestStats();
     const id = setInterval(() => link.requestStats(), STATS_POLL_MS);
     return () => clearInterval(id);
-  }, [showLatency, open, link]);
+  }, [panel, open, link]);
   const latency = useMemo(
     () => snap.serverStats ?? statsFromSamples(snap.hbTimeoutUs),
     [snap.serverStats, snap.hbTimeoutUs],
   );
   const plantDown = open && !snap.stale && st?.plant_ok === false;
 
+  const driveDisabled = !open || snap.stale || mode !== 'ARMED';
+  const joyHint = !open ? 'Not connected' : snap.stale ? 'Waiting for robot' : 'Hold RE-ARM to drive';
+  const eventCount = snap.events.length;
+  const tabs = useMemo<readonly SegmentOption<Panel>[]>(
+    () => [
+      { key: 'map', label: 'Map' },
+      { key: 'latency', label: 'Latency' },
+      { key: 'events', label: 'Events', badge: eventCount },
+    ],
+    [eventCount],
+  );
+
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom', 'left', 'right']}>
       <View style={styles.header}>
+        <BrandMark size={26} />
         <View style={styles.headerText}>
-          <Text style={styles.title}>Teleop</Text>
+          <Text style={styles.title}>SafeStop Teleop</Text>
           <Text style={styles.host} numberOfLines={1}>
             {address}
           </Text>
@@ -92,7 +113,7 @@ export default function TeleopScreen({ address, token, onExit, onRejected }: Tel
             onPress={onReconnect}
             accessibilityRole="button"
             accessibilityLabel="Reconnect"
-            style={({ pressed }) => [styles.ghostBtn, styles.accentBtn, pressed && styles.pressed]}
+            style={({ pressed }) => [styles.headerBtn, styles.accentBtn, pressed && styles.pressed]}
           >
             <Text style={styles.accentBtnText}>
               {snap.status === 'connecting' ? 'Connecting…' : 'Reconnect'}
@@ -100,61 +121,64 @@ export default function TeleopScreen({ address, token, onExit, onRejected }: Tel
           </Pressable>
         )}
         <Pressable
-          onPress={toggleLatency}
-          accessibilityRole="button"
-          accessibilityLabel={showLatency ? 'Show map' : 'Show latency histogram'}
-          accessibilityState={{ selected: showLatency }}
-          style={({ pressed }) => [styles.ghostBtn, showLatency && styles.ghostBtnOn, pressed && styles.pressed]}
-        >
-          <Text style={styles.ghostBtnText}>{showLatency ? 'Peta' : 'Latency'}</Text>
-        </Pressable>
-        <Pressable
           onPress={onExit}
           accessibilityRole="button"
           accessibilityLabel="Disconnect and go back"
-          style={({ pressed }) => [styles.ghostBtn, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.headerBtn, pressed && styles.pressed]}
         >
-          <Text style={styles.ghostBtnText}>Exit</Text>
+          <Text style={styles.headerBtnText}>Exit</Text>
         </Pressable>
       </View>
 
-      <StatusStrip
+      <ModeHero
         status={snap.status}
-        mode={st?.mode ?? null}
-        rttMs={snap.rttMs}
-        hbAgeMs={st && st.hb_age_ms >= 0 ? st.hb_age_ms : null}
-        plantOk={st?.plant_ok}
         stale={snap.stale}
+        mode={mode}
+        lastEvent={snap.events[0] ?? null}
+        linkLossSim={snap.linkLossSim}
+        compact={compact}
       />
 
       {plantDown && (
         <View style={styles.plantBanner} accessibilityRole="alert" accessibilityLiveRegion="assertive">
           <Text style={styles.plantBannerText}>PLANT DOWN — restarting</Text>
-          <Text style={styles.plantBannerSub}>HAM is restarting simplant; motion is held.</Text>
+          <Text style={styles.plantBannerSub}>HAM is restarting the robot process. Motion is held.</Text>
         </View>
       )}
 
-      {showLatency ? (
-        <LatencyPanel stats={latency} waitingForServer={!snap.serverStats} />
-      ) : (
-        <>
+      <StatusStrip
+        rttMs={snap.rttMs}
+        hbAgeMs={st && st.hb_age_ms >= 0 ? st.hb_age_ms : null}
+        plantOk={st?.plant_ok}
+        p99Us={latency.n ? latency.p99Us : null}
+      />
+
+      <Segmented options={tabs} value={panel} onChange={setPanel} accessibilityLabel="Detail view" />
+
+      <View style={styles.panel}>
+        {panel === 'map' && (
           <View style={styles.mapBox} onLayout={onMapLayout}>
             {mapSize > 0 && <TopDownMap size={mapSize} pose={st?.pose ?? null} trail={snap.trail} />}
             {st && (
               <Text style={styles.mapReadout} accessible={false}>
-                v {st.vel.v.toFixed(2)} m/s · w {st.vel.w.toFixed(2)} rad/s
+                v {st.vel.v.toFixed(2)} m/s · ω {st.vel.w.toFixed(2)} rad/s
               </Text>
             )}
           </View>
-          <EventList events={snap.events} />
-        </>
-      )}
+        )}
+        {panel === 'latency' && <LatencyPanel stats={latency} waitingForServer={!snap.serverStats} />}
+        {panel === 'events' && <EventList events={snap.events} max={8} />}
+      </View>
 
       <View style={styles.switchRow}>
-        <Text style={styles.switchLabel} nativeID="linkLossLabel">
-          Simulate link loss
-          <Text style={styles.switchSub}>{'  '}stops hb + cmd, socket stays open</Text>
-        </Text>
+        <View style={styles.switchText}>
+          <Text style={styles.switchLabel} nativeID="linkLossLabel">
+            Simulate link loss
+          </Text>
+          <Text style={styles.switchSub} numberOfLines={1}>
+            Stops heartbeat + commands, socket stays open
+          </Text>
+        </View>
         <Switch
           value={snap.linkLossSim}
           onValueChange={onLinkLoss}
@@ -166,12 +190,8 @@ export default function TeleopScreen({ address, token, onExit, onRejected }: Tel
       </View>
 
       <View style={styles.controls}>
-        <Joystick
-          size={joySize}
-          onChange={onAxis}
-          disabled={!open || snap.stale || st?.mode !== 'ARMED'}
-        />
-        <View style={styles.actions}>
+        <Joystick size={joySize} onChange={onAxis} disabled={driveDisabled} hint={joyHint} />
+        <View style={[styles.actions, { height: joySize }]}>
           <Pressable
             // Fire on touch-down: no wait for release, no cancel on finger slide.
             onPressIn={onEstop}
@@ -183,11 +203,13 @@ export default function TeleopScreen({ address, token, onExit, onRejected }: Tel
             style={({ pressed }) => [styles.estop, pressed && styles.estopPressed]}
           >
             <Text style={styles.estopText}>E-STOP</Text>
+            <Text style={styles.estopSub}>tap to stop now</Text>
           </Pressable>
           <HoldButton
             label="RE-ARM"
             onConfirm={onArm}
             disabled={!open}
+            emphasis={open && !snap.stale && mode !== 'ARMED'}
             accessibilityHint="Press and hold for 1 second to re-enable motion"
           />
         </View>
@@ -204,13 +226,13 @@ const styles = StyleSheet.create({
     paddingBottom: space.sm,
     gap: space.sm,
   },
-  header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingTop: space.sm },
-  headerText: { flex: 1 },
-  title: { color: colors.text, fontSize: font.xl, fontWeight: '800' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingTop: space.xs },
+  headerText: { flex: 1, minWidth: 0 },
+  title: { color: colors.text, fontSize: font.md, fontWeight: '800' },
   host: { color: colors.textMuted, fontSize: font.sm, fontVariant: ['tabular-nums'] },
-  ghostBtn: {
-    minHeight: 44,
-    minWidth: 44,
+  headerBtn: {
+    minHeight: touchSecondary,
+    minWidth: touchSecondary,
     paddingHorizontal: space.md,
     borderRadius: radius.sm,
     borderWidth: 1,
@@ -218,25 +240,38 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  ghostBtnText: { color: colors.text, fontSize: font.md, fontWeight: '700' },
+  headerBtnText: { color: colors.text, fontSize: font.md, fontWeight: '700' },
   accentBtn: { backgroundColor: colors.accent, borderColor: colors.accent },
   accentBtnText: { color: colors.onAccent, fontSize: font.md, fontWeight: '800' },
   pressed: { opacity: 0.7 },
-  ghostBtnOn: { borderColor: colors.accent, backgroundColor: colors.surfaceRaised },
   plantBanner: {
-    backgroundColor: colors.danger,
+    backgroundColor: colors.dangerFill,
     borderRadius: radius.md,
     paddingVertical: space.sm,
     paddingHorizontal: space.md,
   },
   plantBannerText: { color: colors.onDanger, fontSize: font.lg, fontWeight: '900', letterSpacing: 1 },
   plantBannerSub: { color: colors.onDanger, fontSize: font.sm, fontWeight: '600' },
-  mapBox: { flex: 1, minHeight: 140, alignItems: 'center', justifyContent: 'center' },
+  panel: { flex: 1, minHeight: 120 },
+  mapBox: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    overflow: 'hidden',
+  },
   mapReadout: {
     position: 'absolute',
     bottom: space.xs,
     left: space.xs,
     color: colors.textMuted,
+    backgroundColor: colors.bg,
+    paddingHorizontal: space.xs,
+    borderRadius: 4,
+    overflow: 'hidden',
     fontSize: font.sm,
     fontVariant: ['tabular-nums'],
   },
@@ -244,17 +279,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    minHeight: 44,
+    minHeight: touchSecondary,
     gap: space.md,
   },
-  switchLabel: { flex: 1, color: colors.text, fontSize: font.md, fontWeight: '700' },
-  switchSub: { color: colors.textMuted, fontSize: font.sm, fontWeight: '400' },
+  switchText: { flex: 1, minWidth: 0 },
+  switchLabel: { color: colors.text, fontSize: font.md, fontWeight: '700' },
+  switchSub: { color: colors.textMuted, fontSize: font.xs },
   controls: { flexDirection: 'row', alignItems: 'center', gap: space.lg },
-  actions: { flex: 1, gap: space.md },
+  actions: { flex: 1, gap: space.sm },
   estop: {
-    minHeight: touchMin * 2,
-    borderRadius: radius.lg,
-    backgroundColor: colors.danger,
+    flex: 1,
+    borderRadius: radius.xl,
+    backgroundColor: colors.dangerFill,
     borderWidth: 3,
     borderColor: colors.onDanger,
     alignItems: 'center',
@@ -262,4 +298,5 @@ const styles = StyleSheet.create({
   },
   estopPressed: { backgroundColor: colors.dangerPressed },
   estopText: { color: colors.onDanger, fontSize: font.xxl, fontWeight: '900', letterSpacing: 2 },
+  estopSub: { color: colors.onDanger, fontSize: font.xs, fontWeight: '700' },
 });

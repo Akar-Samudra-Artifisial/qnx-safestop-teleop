@@ -1,6 +1,6 @@
 // Unit test for TeleopLink safety logic using a fake WebSocket + fake clock.
 // Usage: npm run test:link
-import { eventLatencyLabel } from '../src/format';
+import { eventLatencyLabel, reasonText } from '../src/format';
 import { parseServerMessage } from '../src/protocol';
 import { parseStatsFrame, statsFromSamples } from '../src/net/stats';
 import {
@@ -155,9 +155,11 @@ check(parseServerMessage('{"type":"state","pose":{"x":1e999,"y":0,"theta":0}}') 
   w2.rx({ type: 'event', event: 'SAFE_STOP', reason: 'estop', detect_us: 80 });
   w2.rx({ type: 'event', event: 'SAFE_STOP', reason: 'plant_lost', detect_us: -1 });
   check(l2.getSnapshot().hbTimeoutUs.join() === '156000', 'only hb_timeout kept as local sample (not estop/plant_lost)');
-  check(eventLatencyLabel('plant_lost', -0.001) === 'plant hilang', 'plant_lost label has no number');
-  check(eventLatencyLabel('x', -1) === 'tanpa latensi', 'negative latency shows no number');
-  check(eventLatencyLabel('hb_timeout', 156.04) === 'deteksi 156,0 ms', 'hb_timeout label keeps number');
+  check(eventLatencyLabel('plant_lost', -0.001) === 'plant lost', 'plant_lost label has no number');
+  check(eventLatencyLabel('x', -1) === 'no latency', 'negative latency shows no number');
+  check(eventLatencyLabel('hb_timeout', 156.04) === 'detected in 156.0 ms', 'hb_timeout label keeps number');
+  check(eventLatencyLabel('estop', 0.08) === 'handled in 0.08 ms', 'estop label: handled, 2 decimals');
+  check(reasonText('hb_timeout').startsWith('Heartbeat') && reasonText('foo_bar') === 'foo bar', 'reason text');
   w2.rx({ type: 'stats', n: 3, p50_us: 155000, p99_us: 161000, max_us: 161000, buckets: [{ le_us: 160000, count: 2 }, { le_us: null, count: 1 }] });
   const ss = l2.getSnapshot().serverStats;
   check(ss?.source === 'server' && ss.n === 3 && ss.buckets[1].leUs === Infinity, 'stats frame parsed (null = inf)');

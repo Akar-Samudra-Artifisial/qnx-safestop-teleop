@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
+import { Platform, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Line, Rect, Text as SvgText } from 'react-native-svg';
 
 import { fmtMs, fmtUsAsMs } from '../format';
 import type { LatencyStats } from '../net/stats';
+import { HEARTBEAT_DEADLINE_MS } from '../protocol';
 import { colors, font, radius, space } from '../theme';
 
 interface LatencyPanelProps {
@@ -12,9 +13,10 @@ interface LatencyPanelProps {
   waitingForServer: boolean;
 }
 
-const CHART_H = 180;
-const AXIS_H = 22;
-const TOP_PAD = 18;
+/** SVG <text> on web falls back to the browser serif; native already uses the system face. */
+const CHART_FONT = Platform.OS === 'web' ? 'system-ui, -apple-system, Helvetica, Arial, sans-serif' : undefined;
+const AXIS_H = 18;
+const TOP_PAD = 16;
 
 const msLabel = (us: number) => {
   const ms = us / 1000;
@@ -23,25 +25,31 @@ const msLabel = (us: number) => {
 const bucketLabel = (leUs: number, prevUs: number | undefined) =>
   Number.isFinite(leUs) ? `≤${msLabel(leUs)}` : `>${msLabel(prevUs ?? 0)}`;
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
   return (
     <View style={styles.metric} accessible accessibilityLabel={`${label} ${value}`}>
       <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={styles.metricValue}>{value}</Text>
+      <Text style={[styles.metricValue, strong && styles.metricStrong]} numberOfLines={1}>
+        {value}
+      </Text>
     </View>
   );
 }
 
 /** Histogram of SAFE_STOP hb_timeout detection latency (teleopd `stats`, or local fallback). */
 export default function LatencyPanel({ stats, waitingForServer }: LatencyPanelProps) {
-  const [width, setWidth] = useState(0);
-  const onLayout = (e: LayoutChangeEvent) => setWidth(Math.floor(e.nativeEvent.layout.width));
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  const onLayout = (e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    setBox({ w: Math.floor(width), h: Math.floor(height) });
+  };
 
   const maxCount = Math.max(1, ...stats.buckets.map((b) => b.count));
   const n = stats.buckets.length || 1;
-  const slot = width / n;
-  const barW = Math.max(4, slot * 0.7);
-  const plotH = CHART_H - AXIS_H - TOP_PAD;
+  const slot = box.w / n;
+  const barW = Math.max(4, slot * 0.68);
+  const plotH = Math.max(20, box.h - AXIS_H - TOP_PAD);
+  const ms = (us: number) => (stats.n ? `${fmtUsAsMs(us)} ms` : '—');
 
   const summary = stats.buckets
     .map((b, i) => `${bucketLabel(b.leUs, stats.buckets[i - 1]?.leUs)} ms: ${b.count}`)
@@ -50,37 +58,39 @@ export default function LatencyPanel({ stats, waitingForServer }: LatencyPanelPr
   return (
     <View style={styles.wrap}>
       <View style={styles.headRow}>
-        <Text style={styles.title} accessibilityRole="header">
-          LATENCY · hb_timeout detect
+        <Text style={styles.title} accessibilityRole="header" numberOfLines={1}>
+          Link-loss stop time
         </Text>
         <Text style={[styles.source, stats.source === 'server' ? styles.sourceServer : styles.sourceLocal]}>
-          {stats.source === 'server' ? 'teleopd' : 'lokal'}
+          {stats.source === 'server' ? 'from teleopd' : 'from app'}
         </Text>
       </View>
-      {stats.source === 'local' && (
-        <Text style={styles.note}>
-          {waitingForServer
-            ? 'Server belum mengirim stats — histogram dari event hb_timeout yang diterima app.'
-            : 'Histogram dari event hb_timeout yang diterima app.'}
-        </Text>
-      )}
+      <Text style={styles.note} numberOfLines={2}>
+        {stats.source === 'local' && waitingForServer
+          ? 'teleopd has not sent stats yet — built from stops this app received.'
+          : `Last heartbeat → SAFE_STOP. Watchdog deadline ${HEARTBEAT_DEADLINE_MS} ms.`}
+      </Text>
 
       <View style={styles.metrics}>
-        <Metric label="n" value={String(stats.n)} />
-        <Metric label="p50" value={stats.n ? `${fmtUsAsMs(stats.p50Us)} ms` : '—'} />
-        <Metric label="p99" value={stats.n ? `${fmtUsAsMs(stats.p99Us)} ms` : '—'} />
-        <Metric label="max" value={stats.n ? `${fmtUsAsMs(stats.maxUs)} ms` : '—'} />
+        <Metric label="samples" value={String(stats.n)} />
+        <Metric label="p50" value={ms(stats.p50Us)} />
+        <Metric label="p99" value={ms(stats.p99Us)} strong />
+        <Metric label="max" value={ms(stats.maxUs)} />
       </View>
 
       <View style={styles.chart} onLayout={onLayout}>
         {stats.n === 0 ? (
-          <Text style={styles.empty}>
-            Belum ada sampel. Nyalakan &quot;Simulate link loss&quot; saat ARMED untuk memicu hb_timeout.
-          </Text>
+          <View style={styles.emptyBox}>
+            <Text style={styles.emptyTitle}>No samples yet</Text>
+            <Text style={styles.empty}>
+              While ARMED, switch on “Simulate link loss” to trip the watchdog.
+            </Text>
+          </View>
         ) : (
-          width > 0 && (
-            <Svg width={width} height={CHART_H} accessibilityLabel={`Histogram, milliseconds: ${summary}`}>
-              <Line x1={0} y1={TOP_PAD + plotH} x2={width} y2={TOP_PAD + plotH} stroke={colors.border} strokeWidth={1} />
+          box.w > 0 &&
+          box.h > 0 && (
+            <Svg width={box.w} height={box.h} accessibilityLabel={`Histogram, milliseconds: ${summary}`}>
+              <Line x1={0} y1={TOP_PAD + plotH} x2={box.w} y2={TOP_PAD + plotH} stroke={colors.border} strokeWidth={1} />
               {stats.buckets.map((b, i) => {
                 const h = (b.count / maxCount) * plotH;
                 const x = i * slot + (slot - barW) / 2;
@@ -103,6 +113,7 @@ export default function LatencyPanel({ stats, waitingForServer }: LatencyPanelPr
                       y={y - 4}
                       fill={colors.text}
                       fontSize={12}
+                      fontFamily={CHART_FONT}
                       fontWeight="700"
                       textAnchor="middle"
                     >
@@ -112,9 +123,10 @@ export default function LatencyPanel({ stats, waitingForServer }: LatencyPanelPr
                   <SvgText
                     key={`l${i}`}
                     x={i * slot + slot / 2}
-                    y={CHART_H - 6}
+                    y={box.h - 4}
                     fill={colors.textMuted}
-                    fontSize={11}
+                    fontSize={10}
+                    fontFamily={CHART_FONT}
                     textAnchor="middle"
                   >
                     {bucketLabel(b.leUs, stats.buckets[i - 1]?.leUs)}
@@ -125,24 +137,35 @@ export default function LatencyPanel({ stats, waitingForServer }: LatencyPanelPr
           )
         )}
       </View>
-      <Text style={styles.axisNote}>batas bucket dalam ms · merah = di luar bucket terakhir</Text>
+      <Text style={styles.axisNote}>Bucket upper bound, ms · red = above the last bucket</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: colors.surface, borderRadius: radius.md, padding: space.md, gap: space.sm },
+  wrap: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: space.md,
+    gap: space.sm,
+  },
   headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.sm },
-  title: { color: colors.text, fontSize: font.md, fontWeight: '800', letterSpacing: 1 },
-  source: { fontSize: font.sm, fontWeight: '800', paddingHorizontal: space.sm, paddingVertical: 2, borderRadius: radius.sm },
-  sourceServer: { color: colors.onAccent, backgroundColor: colors.ok },
+  title: { flex: 1, color: colors.text, fontSize: font.md, fontWeight: '800' },
+  source: { fontSize: font.xs, fontWeight: '800', paddingHorizontal: space.sm, paddingVertical: 2, borderRadius: radius.pill, overflow: 'hidden' },
+  sourceServer: { color: colors.onOk, backgroundColor: colors.ok },
   sourceLocal: { color: colors.onAccent, backgroundColor: colors.warn },
-  note: { color: colors.textMuted, fontSize: font.sm },
-  metrics: { flexDirection: 'row', gap: space.sm },
-  metric: { flex: 1, backgroundColor: colors.surfaceRaised, borderRadius: radius.sm, padding: space.sm },
-  metricLabel: { color: colors.textMuted, fontSize: font.sm, fontWeight: '700' },
-  metricValue: { color: colors.text, fontSize: font.md, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  chart: { flex: 1, minHeight: CHART_H, justifyContent: 'center' },
-  empty: { color: colors.textMuted, fontSize: font.md, textAlign: 'center' },
-  axisNote: { color: colors.textMuted, fontSize: 11 },
+  note: { color: colors.textMuted, fontSize: font.xs },
+  metrics: { flexDirection: 'row', gap: space.xs },
+  metric: { flex: 1, backgroundColor: colors.surfaceRaised, borderRadius: radius.sm, paddingVertical: space.xs, paddingHorizontal: space.sm },
+  metricLabel: { color: colors.textMuted, fontSize: font.xs, fontWeight: '700' },
+  metricValue: { color: colors.text, fontSize: font.sm, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  metricStrong: { color: colors.accent },
+  chart: { flex: 1, minHeight: 60 },
+  emptyBox: { flex: 1, justifyContent: 'center', gap: space.xs },
+  emptyTitle: { color: colors.text, fontSize: font.md, fontWeight: '700', textAlign: 'center' },
+  empty: { color: colors.textMuted, fontSize: font.sm, textAlign: 'center' },
+  axisNote: { color: colors.textMuted, fontSize: font.xs },
 });

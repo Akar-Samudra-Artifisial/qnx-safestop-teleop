@@ -1,115 +1,114 @@
+import { memo, type ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { HEARTBEAT_DEADLINE_MS, type Mode } from '../protocol';
-import type { LinkStatus } from '../net/teleopLink';
-import { colors, font, modeColor, radius, space } from '../theme';
+import { fmtUsAsMs } from '../format';
+import { HEARTBEAT_DEADLINE_MS } from '../protocol';
+import { colors, font, radius, space } from '../theme';
 
 interface StatusStripProps {
-  status: LinkStatus;
-  mode: Mode | null;
   rttMs: number | null;
   hbAgeMs: number | null;
   /** Shown only when the server reports it (teleopd `plant_ok`). */
   plantOk?: boolean;
-  stale: boolean;
+  /** p99 hb_timeout detection latency, µs; null = no samples yet. */
+  p99Us: number | null;
 }
 
-function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
+interface ChipProps {
+  label: string;
+  value: string;
+  unit?: string;
+  color?: string;
+  a11y: string;
+  flex?: number;
+  children?: ReactNode;
+}
+
+function Chip({ label, value, unit, color, a11y, flex = 1, children }: ChipProps) {
   return (
-    <View style={styles.stat} accessible accessibilityLabel={`${label} ${value}`}>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={[styles.statValue, color ? { color } : null]}>{value}</Text>
+    <View style={[styles.chip, { flex }]} accessible accessibilityLabel={a11y}>
+      <Text style={styles.label} numberOfLines={1}>
+        {label}
+      </Text>
+      <Text style={[styles.value, color ? { color } : null]} numberOfLines={1}>
+        {value}
+        {unit && <Text style={styles.unit}> {unit}</Text>}
+      </Text>
+      {children}
     </View>
   );
 }
 
-export default function StatusStrip({ status, mode, rttMs, hbAgeMs, plantOk, stale }: StatusStripProps) {
-  const linkUp = status === 'open' && !stale;
-  const modeLabel = !linkUp ? (status === 'open' ? 'NO DATA' : status.toUpperCase()) : (mode ?? '…');
-  const modeTint = linkUp && mode ? modeColor[mode] : colors.warn;
-
+/** Link health at a glance: RTT, heartbeat age against the watchdog deadline, plant, p99. */
+function StatusStrip({ rttMs, hbAgeMs, plantOk, p99Us }: StatusStripProps) {
   const age = hbAgeMs ?? 0;
   const ratio = Math.min(1, age / HEARTBEAT_DEADLINE_MS);
   const barColor = ratio >= 1 ? colors.danger : ratio > 0.66 ? colors.warn : colors.ok;
 
   return (
-    <View style={styles.wrap}>
-      <View
-        style={[styles.mode, { borderColor: modeTint }]}
-        accessible
-        accessibilityRole="header"
-        accessibilityLabel={`Mode ${modeLabel}`}
-        accessibilityLiveRegion="polite"
+    <View style={styles.row}>
+      <Chip
+        label="RTT"
+        value={rttMs == null ? '—' : String(Math.round(rttMs))}
+        unit={rttMs == null ? undefined : 'ms'}
+        a11y={rttMs == null ? 'Round trip time unknown' : `Round trip time ${Math.round(rttMs)} milliseconds`}
+      />
+      <Chip
+        label="HEARTBEAT"
+        value={hbAgeMs == null ? '—' : String(Math.round(age))}
+        unit={hbAgeMs == null ? undefined : `/ ${HEARTBEAT_DEADLINE_MS}`}
+        color={hbAgeMs == null ? undefined : barColor}
+        flex={1.35}
+        a11y={
+          hbAgeMs == null
+            ? 'Heartbeat age unknown'
+            : `Heartbeat age ${Math.round(age)} of ${HEARTBEAT_DEADLINE_MS} millisecond deadline`
+        }
       >
-        <View style={[styles.dot, { backgroundColor: modeTint }]} />
-        <Text style={[styles.modeText, { color: modeTint }]}>{modeLabel}</Text>
-      </View>
-      <View style={styles.row}>
-        <Stat label="RTT" value={rttMs == null ? '—' : `${Math.round(rttMs)} ms`} />
-        <Stat
-          label="HB AGE"
-          value={hbAgeMs == null ? '—' : `${Math.round(age)} ms`}
-          color={hbAgeMs == null ? undefined : barColor}
-        />
-        {plantOk !== undefined && (
-          <Stat
-            label="PLANT"
-            value={plantOk ? 'OK' : 'DOWN'}
-            color={plantOk ? colors.ok : colors.danger}
-          />
-        )}
-      </View>
-      <View
-        style={styles.track}
-        accessible
-        accessibilityRole="progressbar"
-        accessibilityLabel="Heartbeat age against 150 millisecond deadline"
-        accessibilityValue={{ min: 0, max: HEARTBEAT_DEADLINE_MS, now: Math.round(Math.min(age, HEARTBEAT_DEADLINE_MS)) }}
-      >
-        <View style={[styles.fill, { width: `${ratio * 100}%`, backgroundColor: barColor }]} />
-        <Text style={styles.trackLabel}>deadline {HEARTBEAT_DEADLINE_MS} ms</Text>
-      </View>
+        <View style={styles.track}>
+          <View style={[styles.fill, { width: `${ratio * 100}%`, backgroundColor: barColor }]} />
+        </View>
+      </Chip>
+      <Chip
+        label="PLANT"
+        value={plantOk === undefined ? '—' : plantOk ? 'OK' : 'DOWN'}
+        color={plantOk === undefined ? undefined : plantOk ? colors.ok : colors.danger}
+        flex={0.9}
+        a11y={plantOk === undefined ? 'Plant status unknown' : plantOk ? 'Plant OK' : 'Plant down'}
+      />
+      <Chip
+        label="STOP p99"
+        value={p99Us == null ? '—' : fmtUsAsMs(p99Us)}
+        unit={p99Us == null ? undefined : 'ms'}
+        flex={1.15}
+        a11y={
+          p99Us == null
+            ? 'Stop detection p99 not measured yet'
+            : `Stop detection 99th percentile ${fmtUsAsMs(p99Us)} milliseconds`
+        }
+      />
     </View>
   );
 }
 
+// Primitive props only: skips re-render when a 20 Hz frame leaves the numbers unchanged.
+export default memo(StatusStrip);
+
 const styles = StyleSheet.create({
-  wrap: { gap: space.sm },
-  mode: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    borderWidth: 2,
-    borderRadius: radius.md,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.md,
-    backgroundColor: colors.surface,
-  },
-  dot: { width: 12, height: 12, borderRadius: 6 },
-  modeText: { fontSize: font.xl, fontWeight: '900', letterSpacing: 1.5 },
   row: { flexDirection: 'row', gap: space.sm },
-  stat: {
-    flex: 1,
+  chip: {
     backgroundColor: colors.surface,
-    borderRadius: radius.sm,
-    paddingVertical: space.xs,
-    paddingHorizontal: space.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.sm,
+    gap: 2,
+    minWidth: 0,
   },
-  statLabel: { color: colors.textMuted, fontSize: font.sm, fontWeight: '700', letterSpacing: 1 },
-  statValue: { color: colors.text, fontSize: font.lg, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  track: {
-    height: 18,
-    borderRadius: radius.sm,
-    backgroundColor: colors.surface,
-    overflow: 'hidden',
-    justifyContent: 'center',
-  },
-  fill: { position: 'absolute', left: 0, top: 0, bottom: 0 },
-  trackLabel: {
-    color: colors.text,
-    fontSize: 11,
-    fontWeight: '700',
-    textAlign: 'right',
-    paddingRight: space.sm,
-  },
+  label: { color: colors.textMuted, fontSize: font.xs, fontWeight: '700', letterSpacing: 0.8 },
+  value: { color: colors.text, fontSize: font.lg, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  unit: { color: colors.textMuted, fontSize: font.xs, fontWeight: '600' },
+  track: { height: 4, borderRadius: 2, backgroundColor: colors.grid, overflow: 'hidden', marginTop: 2 },
+  fill: { position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 2 },
 });

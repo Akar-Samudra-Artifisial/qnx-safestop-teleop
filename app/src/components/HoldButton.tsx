@@ -16,15 +16,18 @@ interface HoldButtonProps {
   onConfirm: () => void;
   holdMs?: number;
   disabled?: boolean;
+  /** Draw attention: this is the next thing the operator must do. */
+  emphasis?: boolean;
   accessibilityHint?: string;
 }
 
-/** Press-and-hold confirmation with a fill progress bar. */
+/** Press-and-hold confirmation; the fill sweeps left→right over `holdMs`. */
 export default function HoldButton({
   label,
   onConfirm,
   holdMs = 1000,
   disabled = false,
+  emphasis = false,
   accessibilityHint,
 }: HoldButtonProps) {
   const progress = useSharedValue(0);
@@ -60,12 +63,17 @@ export default function HoldButton({
       // Screen readers cannot hold; a double-tap activation confirms directly.
       accessibilityActions={[{ name: 'activate' }]}
       onAccessibilityAction={(e) => e.nativeEvent.actionName === 'activate' && onConfirm()}
-      style={({ pressed }) => [styles.btn, pressed && styles.pressed, disabled && styles.disabled]}
+      style={({ pressed }) => [
+        styles.btn,
+        emphasis && styles.emphasis,
+        pressed && styles.pressed,
+        disabled && styles.disabled,
+      ]}
     >
       <Animated.View style={[styles.fill, fillStyle]} />
       <View style={styles.content}>
-        <Text style={styles.text}>{label}</Text>
-        <Text style={styles.sub}>hold 1 s</Text>
+        <Text style={[styles.text, emphasis && styles.textEmphasis]}>{label}</Text>
+        <Text style={styles.sub}>hold {holdMs / 1000} s</Text>
       </View>
     </Pressable>
   );
@@ -75,16 +83,18 @@ const styles = StyleSheet.create({
   btn: {
     minHeight: touchMin,
     borderRadius: radius.md,
-    borderWidth: 2,
-    borderColor: colors.ok,
-    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     overflow: 'hidden',
     justifyContent: 'center',
   },
+  emphasis: { borderColor: colors.ok, backgroundColor: colors.okSoft },
   pressed: { borderColor: colors.text },
   disabled: { opacity: 0.4 },
-  fill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: colors.ok, opacity: 0.35 },
-  content: { alignItems: 'center', paddingVertical: 8 },
-  text: { color: colors.text, fontSize: font.lg, fontWeight: '800', letterSpacing: 1 },
-  sub: { color: colors.textMuted, fontSize: font.sm },
+  fill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: colors.ok, opacity: 0.45 },
+  content: { alignItems: 'center', paddingVertical: 6 },
+  text: { color: colors.textMuted, fontSize: font.lg, fontWeight: '800', letterSpacing: 1 },
+  textEmphasis: { color: colors.text },
+  sub: { color: colors.textMuted, fontSize: font.xs, fontWeight: '600' },
 });

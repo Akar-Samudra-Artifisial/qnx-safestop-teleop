@@ -12,12 +12,12 @@ import { colors } from './src/theme';
 
 const DEFAULT_TARGET: ConnectTarget = { address: '', token: '' };
 const REJECTED_MSG: Record<RejectReason, string> = {
-  unauthorized: 'Token salah (401)',
-  forbidden: 'Koneksi ditolak server: Origin tidak diizinkan (403)',
-  conflict: 'Robot sedang dipakai operator lain (409)',
-  timeout: 'Host tidak terjangkau',
+  unauthorized: 'Wrong pairing code (401). Check the code teleopd printed.',
+  forbidden: 'Server refused this app’s origin (403).',
+  conflict: 'Robot is in use by another operator (409).',
+  timeout: 'Robot not reachable. Check the address and that you are on the same network.',
   // RN did not expose the HTTP status.
-  unknown: 'Token salah atau robot sedang dipakai',
+  unknown: 'Wrong pairing code, or the robot is in use.',
 };
 
 export default function App() {

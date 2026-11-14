@@ -114,7 +114,13 @@ wss.on('connection', (ws, req) => {
   // Single operator: a new (authorised, not-ARMED) client replaces the previous one.
   // --dev-plant control sockets (?dev=1) neither replace nor get replaced.
   ws.dev = DEV_PLANT && new URL(req.url ?? '/', 'http://x').searchParams.get('dev') === '1';
-  if (!ws.dev) for (const c of wss.clients) if (c !== ws && !c.dev) c.terminate();
+  if (!ws.dev) {
+    for (const c of wss.clients) if (c !== ws && !c.dev) c.terminate();
+    // Per-operator link state: a new client's seq restarts at 0, so a stale seq_ack from the
+    // previous session would never match (RTT stays null). Same for heartbeat age.
+    robot.seqAck = 0;
+    robot.lastHbUs = 0;
+  }
   log('client connected', req.socket.remoteAddress);
   ws.on('message', (data) => {
     let m;
