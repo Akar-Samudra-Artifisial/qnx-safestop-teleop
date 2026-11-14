@@ -62,5 +62,6 @@ exec docker --context "$CONTEXT" run --rm "${tty_flags[@]}" \
   -v "$REPO_DIR:/work" \
   -w /work \
   -e QNX_SDP_ENV="$SDP_ENV" \
+  -e TELEOP_TOKEN \
   "$IMAGE" /bin/bash -c 'sdp_env() { . "$QNX_SDP_ENV" >/dev/null; }; [ -f "$QNX_SDP_ENV" ] && sdp_env; exec "$@"' \
   qnx-sdp "${@:-/bin/bash}"

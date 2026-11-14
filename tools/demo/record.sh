@@ -376,7 +376,7 @@ preflight() {
     r="$(ask_enter "    Redeploy now with QNX_DEST=$DEST tools/qemu/deploy.sh? [y/N] ")"
     if [[ "$r" == [yY]* ]]; then
       if [[ -z "${TELEOP_TOKEN:-}" ]]; then
-        read -r -s -p "    Pairing token (hidden, empty = random token in teleopd.log): " TELEOP_TOKEN; printf '\n'
+        read -r -s -p "    Pairing token (hidden, empty = keep the target's /data/teleop.token): " TELEOP_TOKEN; printf '\n'
       fi
       TELEOP_TOKEN="$TELEOP_TOKEN" QNX_DEST=$DEST "$REPO_DIR/tools/qemu/deploy.sh" || { warn "deploy failed"; return 1; }
       sleep 1
