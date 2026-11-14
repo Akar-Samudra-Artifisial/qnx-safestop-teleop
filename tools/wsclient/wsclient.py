@@ -17,8 +17,10 @@ Exit code 0 when every check passes.
 
 import argparse
 import base64
+import csv
 import hashlib
 import json
+import math
 import os
 import queue
 import socket
@@ -157,6 +159,7 @@ class Session:
         self.state = None
         self.state_t = 0.0
         self.events = []
+        self.stats_msg = None
         threading.Thread(target=self._sender, daemon=True).start()
 
     def _sender(self):
@@ -204,6 +207,8 @@ class Session:
             elif m.get("type") == "event":
                 self.events.append((t, m))
                 seen.append((t, m))
+            elif m.get("type") == "stats":
+                self.stats_msg = m
 
     def wait_event(self, timeout):
         end = time.monotonic() + timeout
@@ -234,9 +239,109 @@ class Session:
                 return self.state
         return None
 
+    def request_stats(self, timeout=1.0):
+        """Send stats_req; returns the next stats message (None on timeout)."""
+        self.stats_msg = None
+        self.ws.send({"type": "stats_req"})
+        end = time.monotonic() + timeout
+        while time.monotonic() < end and self.stats_msg is None:
+            self.pump(0.02)
+        return self.stats_msg
+
 
 def stats(xs):
     return f"min {min(xs):.1f} / median {statistics.median(xs):.1f} / max {max(xs):.1f}"
+
+
+def pct(sorted_xs, p):
+    """Nearest-rank percentile (same definition as teleopd's stats)."""
+    k = max(1, math.ceil(p * len(sorted_xs)))
+    return sorted_xs[k - 1]
+
+
+STATS_LE_US = [150000, 152000, 154000, 156000, 158000, 160000, 165000, 170000, None]
+
+
+def stats_msg_ok(m):
+    """Structure check of a teleopd "stats" message; returns (ok, detail)."""
+    if not m:
+        return False, "no stats reply"
+    b = m.get("buckets") or []
+    les = [x.get("le_us") for x in b]
+    total = sum(x.get("count", 0) for x in b)
+    ok = (
+        les == STATS_LE_US
+        and total == m.get("n")
+        and (m["n"] == 0 or m["p50_us"] <= m["p99_us"] <= m["max_us"])
+    )
+    return ok, (
+        f"n={m.get('n')} p50 {m.get('p50_us')} / p99 {m.get('p99_us')} / "
+        f"max {m.get('max_us')} us, {len(b)} buckets sum {total}"
+    )
+
+
+def run_bench(a):
+    """--bench N: N hb-loss trials, one CSV row per trial, p50/p99/max summary."""
+    ws = WsClient(a.host, a.port, a.token)
+    s = Session(ws)
+    s.hb_on.set()
+    s.pump(0.5)
+    rows = []
+    t_start = time.time()
+    for i in range(a.bench):
+        armed = bool(s.state and s.state["mode"] == "ARMED")
+        for _ in range(5):
+            if armed:
+                break
+            s.hb_on.set()
+            s.pump(1.0)
+            armed = s.arm()
+        if not armed:
+            print(
+                f"trial {i}: arm failed (mode={s.state and s.state['mode']})",
+                file=sys.stderr,
+            )
+            break
+        s.pump(0.25)
+        s.hb_on.clear()
+        last = s.last_hb_sent
+        ev = s.wait_event(10.0)
+        if ev is None or ev[1]["reason"] != "hb_timeout":
+            print(f"trial {i}: no hb_timeout event ({ev!r})", file=sys.stderr)
+            break
+        client_ms = round((ev[0] - last) * 1000, 3)
+        # The server cannot detect a loss earlier than the client observed it, so detect_us
+        # larger than client_ms means the guest clock ran ahead of the host clock (QEMU TCG
+        # virtual-time catch-up or host sleep): flag it, it is not a teleopd latency.
+        skew = int(ev[1]["detect_us"] / 1000 - client_ms > 5)
+        rows.append((i, ev[1]["detect_us"], client_ms, skew))
+        s.hb_on.set()
+        # Wait for the SAFE_STOP state: a stale ARMED state would skip the next arm and the
+        # trial would then wait for an event that cannot come.
+        s.wait_mode("SAFE_STOP", 3.0)
+        s.pump(0.1)
+        if a.progress and (i + 1) % a.progress == 0:
+            print(f"{i + 1}/{a.bench}", flush=True)
+    srv = s.request_stats()
+    ws.close()
+    if a.csv:
+        with open(a.csv, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["trial", "detect_us", "client_ms", "clock_skew"])
+            w.writerows(rows)
+    if not rows:
+        print("no trials completed", file=sys.stderr)
+        return 1
+    d = sorted(r[1] / 1000 for r in rows)
+    print(
+        f"label={a.label} trials={len(rows)}/{a.bench} "
+        f"elapsed={time.time() - t_start:.0f}s detect_ms "
+        f"p50={pct(d, 0.5):.2f} p99={pct(d, 0.99):.2f} max={d[-1]:.2f} min={d[0]:.2f} "
+        f"clock_skew_trials={sum(r[3] for r in rows)}"
+    )
+    ok, detail = stats_msg_ok(srv)
+    print(f"server stats ({'ok' if ok else 'BAD'}): {detail}")
+    return 0 if len(rows) == a.bench else 1
 
 
 def main():
@@ -257,9 +362,21 @@ def main():
         default=os.environ.get("TELEOP_TOKEN"),
         help="pairing token printed by teleopd (default: $TELEOP_TOKEN)",
     )
+    ap.add_argument(
+        "--bench", type=int, default=0, help="bench mode: N hb-loss trials, no checks"
+    )
+    ap.add_argument("--csv", help="bench mode: write per-trial CSV here")
+    ap.add_argument(
+        "--label", default="", help="bench mode: label for the summary line"
+    )
+    ap.add_argument(
+        "--progress", type=int, default=0, help="bench mode: print every N trials"
+    )
     a = ap.parse_args()
     if not a.token:
         ap.error("--token or TELEOP_TOKEN is required")
+    if a.bench:
+        return run_bench(a)
 
     checks = []
 
@@ -349,6 +466,13 @@ def main():
         )
         print(
             f"       client-observed last hb sent -> event recv (ms): {stats(client_ms)}"
+        )
+        m = s.request_stats()
+        ok, detail = stats_msg_ok(m)
+        check(
+            "stats_req -> stats histogram (9 fixed buckets, counts sum to n)",
+            ok and m["n"] >= len(detect_ms),
+            detail,
         )
 
     s.pump(1.0)

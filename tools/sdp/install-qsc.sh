@@ -21,7 +21,8 @@ SDP_BASELINE="${SDP_BASELINE:-com.qnx.qnx800}"
 # IDs verified in the qnx800 server-cache content.xml. sshd/sshd-auth/sshd-session come
 # from com.qnx.qnx800.target.net.openSSH, which the SDP baseline already installs.
 # driver.virtio.startup is needed for mkqnximage --arch=aarch64le on the QEMU virt board.
-QNX_EXTRA_PACKAGES="${QNX_EXTRA_PACKAGES:-com.qnx.qnx800.target.qemuvirt,com.qnx.qnx800.target.driver.virtio.devb,com.qnx.qnx800.target.driver.virtio.startup,com.qnx.qnx800.target.net.openSSH}"
+# os_services.ham = High Availability Manager (ham, libham, <ha/ham.h>) for simplant restart.
+QNX_EXTRA_PACKAGES="${QNX_EXTRA_PACKAGES:-com.qnx.qnx800.target.qemuvirt,com.qnx.qnx800.target.driver.virtio.devb,com.qnx.qnx800.target.driver.virtio.startup,com.qnx.qnx800.target.net.openSSH,com.qnx.qnx800.target.os_services.ham}"
 
 die() { echo "Error: $*" >&2; exit 1; }
 

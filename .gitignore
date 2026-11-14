@@ -9,6 +9,8 @@ qnx/**/*.o
 qnx/teleopd/teleopd
 qnx/simplant/simplant
 qnx/latbench/latbench
+qnx/teleopctl/teleopctl
+docs/codelab/watchdog/watchdog
 tools/hello/hello
 # toolchain crash dumps (ld occasionally segfaults under amd64 emulation)
 core

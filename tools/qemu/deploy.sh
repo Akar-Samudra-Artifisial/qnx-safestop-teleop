@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copy teleopd + simplant to the running QEMU target and (re)start them.
+# Copy teleopd, simplant, teleopctl, latbench to the running QEMU target and (re)start them.
 # Usage: tools/qemu/deploy.sh [teleopd args...]   (default: -p 8080 -v)
 # Env:   TELEOP_TOKEN (adds -t), QNX_SSH_PORT (2222), QNX_IMAGE_DIR (<repo>/build/qnx-image), QNX_DEST (/tmp)
 # Logs on target: $QNX_DEST/simplant.log, $QNX_DEST/teleopd.log (+ slog2info).
@@ -11,7 +11,8 @@ IMAGE_DIR="${QNX_IMAGE_DIR:-$REPO_DIR/build/qnx-image}"
 PORT="${QNX_SSH_PORT:-2222}"
 DEST="${QNX_DEST:-/tmp}"
 KEY="$IMAGE_DIR/ssh/id_ed25519"
-BINS=("$REPO_DIR/qnx/teleopd/teleopd" "$REPO_DIR/qnx/simplant/simplant")
+BINS=("$REPO_DIR/qnx/teleopd/teleopd" "$REPO_DIR/qnx/simplant/simplant"
+      "$REPO_DIR/qnx/teleopctl/teleopctl" "$REPO_DIR/qnx/latbench/latbench")
 
 [[ -f "$KEY" ]] || { echo "error: project key $KEY missing (tools/sdp/make-image.sh)" >&2; exit 1; }
 for b in "${BINS[@]}"; do
