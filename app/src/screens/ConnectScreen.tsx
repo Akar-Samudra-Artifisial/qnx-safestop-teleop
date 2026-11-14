@@ -34,7 +34,7 @@ export default function ConnectScreen({ initial, connectError, onConnect }: Conn
   const submit = useCallback(() => {
     const a = address.trim();
     const next: FieldErrors = {};
-    if (!ADDRESS_RE.test(a)) next.address = 'Use host:port, e.g. 192.168.1.10:8080';
+    if (!ADDRESS_RE.test(a)) next.address = 'Use host:port — the robot/Mac LAN IP, e.g. 192.168.x.x:8080';
     if (!TOKEN_RE.test(token)) next.token = 'Token is the 6-digit code printed by teleopd';
     setErrors(next);
     if (next.address || next.token) return;
@@ -61,7 +61,7 @@ export default function ConnectScreen({ initial, connectError, onConnect }: Conn
           style={[styles.input, errors.address ? styles.inputError : null]}
           value={address}
           onChangeText={setAddress}
-          placeholder="host:port"
+          placeholder="192.168.x.x:8080"
           placeholderTextColor={colors.textMuted}
           autoCapitalize="none"
           autoCorrect={false}

@@ -6,10 +6,18 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import ConnectScreen, { type ConnectTarget } from './src/screens/ConnectScreen';
 import TeleopScreen from './src/screens/TeleopScreen';
+import type { RejectReason } from './src/net/teleopLink';
 import { colors } from './src/theme';
 
-const DEFAULT_TARGET: ConnectTarget = { address: '192.168.1.10:8080', token: '' };
-const REJECTED_MSG = 'Token salah atau robot sedang dipakai';
+const DEFAULT_TARGET: ConnectTarget = { address: '', token: '' };
+const REJECTED_MSG: Record<RejectReason, string> = {
+  unauthorized: 'Token salah (401)',
+  forbidden: 'Koneksi ditolak server: Origin tidak diizinkan (403)',
+  conflict: 'Robot sedang dipakai operator lain (409)',
+  timeout: 'Host tidak terjangkau',
+  // RN did not expose the HTTP status.
+  unknown: 'Token salah atau robot sedang dipakai',
+};
 
 export default function App() {
   // In-memory only: the app has no persistent storage module installed.
@@ -23,8 +31,8 @@ export default function App() {
     setActive(t);
   }, []);
   const exit = useCallback(() => setActive(null), []);
-  const rejected = useCallback(() => {
-    setConnectError(REJECTED_MSG);
+  const rejected = useCallback((reason: RejectReason) => {
+    setConnectError(REJECTED_MSG[reason]);
     setActive(null);
   }, []);
 

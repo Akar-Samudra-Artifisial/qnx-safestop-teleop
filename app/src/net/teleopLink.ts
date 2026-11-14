@@ -37,9 +37,32 @@ export interface TrailPoint {
   y: number;
 }
 
+/** Not opened within this long → closed with rejectReason 'timeout'. */
+export const CONNECT_TIMEOUT_MS = 5000;
+
+/**
+ * Why a handshake never opened. HTTP status is parsed from the native error message when
+ * RN exposes it (iOS: "...bad response code from server: 403", Android OkHttp: "...was
+ * '403 Forbidden'"); otherwise 'unknown'.
+ */
+export type RejectReason = 'unauthorized' | 'forbidden' | 'conflict' | 'timeout' | 'unknown';
+
+const REJECT_BY_STATUS: Record<string, RejectReason> = {
+  '401': 'unauthorized',
+  '403': 'forbidden',
+  '409': 'conflict',
+};
+
+export function rejectReasonFromMessage(msg: unknown): RejectReason {
+  const m = typeof msg === 'string' ? /\b(401|403|409)\b/.exec(msg) : null;
+  return m ? REJECT_BY_STATUS[m[1]] : 'unknown';
+}
+
 export interface LinkSnapshot {
   url: string;
   status: LinkStatus;
+  /** Set with status 'rejected'; null otherwise. */
+  rejectReason: RejectReason | null;
   state: StateMsg | null;
   /** Server-measured ping RTT when available, else client-measured seq→seq_ack, ms. */
   rttMs: number | null;
@@ -80,6 +103,7 @@ const finiteOr0 = (x: number) => (Number.isFinite(x) ? x : 0);
 export class TeleopLink {
   private ws: WebSocket | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private listeners = new Set<() => void>();
   private seq = 0;
   private sentAt = new Map<number, number>();
@@ -104,6 +128,7 @@ export class TeleopLink {
     this.snap = {
       url,
       status: 'closed',
+      rejectReason: null,
       state: null,
       rttMs: null,
       linkLossSim: false,
@@ -155,35 +180,55 @@ export class TeleopLink {
     this.lastAck = -1;
     this.lastRxAt = 0;
     this.sentAt.clear();
-    this.update({ status: 'connecting', state: null, rttMs: null, stale: false });
+    this.update({ status: 'connecting', rejectReason: null, state: null, rttMs: null, stale: false });
 
     let ws: WebSocket;
     try {
       ws = new WebSocket(this.snap.url);
     } catch {
-      this.update({ status: 'rejected' });
+      this.update({ status: 'rejected', rejectReason: 'unknown' });
       return;
     }
     let opened = false;
+    // First specific reason wins (onerror carries the message, onclose follows it).
+    let reason: RejectReason = 'unknown';
     this.ws = ws;
+    this.connectTimer = setTimeout(() => {
+      if (this.ws !== ws || opened) return;
+      this.teardown();
+      this.zeroAxis();
+      this.update({ status: 'rejected', rejectReason: 'timeout' });
+    }, CONNECT_TIMEOUT_MS);
     ws.onopen = () => {
       if (this.ws !== ws) return;
       opened = true;
+      this.clearConnectTimer();
       this.lastRxAt = this.now();
       this.update({ status: 'open' });
       this.timer = setInterval(this.tick, TICK_MS);
     };
-    ws.onclose = () => {
+    ws.onclose = (e: CloseEvent) => {
       if (this.ws !== ws) return;
       this.stopTimer();
+      this.clearConnectTimer();
       this.zeroAxis();
-      const status: LinkStatus = !opened ? 'rejected' : this.snap.status === 'error' ? 'error' : 'closed';
-      this.update({ status });
+      if (!opened) {
+        if (reason === 'unknown') reason = rejectReasonFromMessage((e as { reason?: unknown } | undefined)?.reason);
+        this.update({ status: 'rejected', rejectReason: reason });
+        return;
+      }
+      this.update({ status: this.snap.status === 'error' ? 'error' : 'closed' });
     };
-    ws.onerror = () => {
+    ws.onerror = (e: Event) => {
       if (this.ws !== ws) return;
       this.zeroAxis();
-      this.update({ status: opened ? 'error' : 'rejected' });
+      if (opened) {
+        this.update({ status: 'error' });
+        return;
+      }
+      this.clearConnectTimer();
+      if (reason === 'unknown') reason = rejectReasonFromMessage((e as { message?: unknown } | undefined)?.message);
+      this.update({ status: 'rejected', rejectReason: reason });
     };
     ws.onmessage = (e: MessageEvent) => {
       if (this.ws !== ws || typeof e.data !== 'string') return;
@@ -202,8 +247,14 @@ export class TeleopLink {
     this.timer = null;
   }
 
+  private clearConnectTimer() {
+    if (this.connectTimer) clearTimeout(this.connectTimer);
+    this.connectTimer = null;
+  }
+
   private teardown() {
     this.stopTimer();
+    this.clearConnectTimer();
     const ws = this.ws;
     this.ws = null;
     if (ws) {

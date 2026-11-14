@@ -3,7 +3,7 @@
 // differential-drive kinematics, 150 ms heartbeat deadline, arm / estop.
 // Same pairing contract as teleopd: ws://host:port/?t=<token> (env TELEOP_TOKEN, default
 // 123456) else 401; a non-empty, non-"null" Origin is refused with 403 unless it equals
-// --origin; a second client while ARMED is refused with 409.
+// --origin or http(s)://<Host> (Host = IPv4 literal/localhost); a second client while ARMED is refused with 409.
 // Usage: node scripts/mock-server.mjs [--port 8080] [--origin http://localhost:8081] [--quiet]
 import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
@@ -55,9 +55,22 @@ const tokenOk = (got) => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 
+// Same rule as teleopd origin_ok(): Host must be an IPv4 literal or localhost (optional
+// :port) for the same-host case, so a DNS-rebinding name cannot pass.
+const HOST_LITERAL_RE = /^(localhost|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d{1,5})?$/i;
+const originOk = (origin, host) => {
+  if (!origin || origin === 'null') return true;
+  if (ALLOWED_ORIGIN && origin === ALLOWED_ORIGIN) return true;
+  const m = /^https?:\/\/(.*)$/i.exec(origin);
+  return !!m && !!host && HOST_LITERAL_RE.test(host) && m[1].toLowerCase() === host.toLowerCase();
+};
+
 function verifyClient({ req }, done) {
   const origin = req.headers.origin;
-  if (origin && origin !== 'null' && origin !== ALLOWED_ORIGIN) return done(false, 403, 'Forbidden');
+  if (!originOk(origin, req.headers.host)) {
+    log('handshake refused: 403', `origin=${origin} host=${req.headers.host}`);
+    return done(false, 403, 'Forbidden');
+  }
   const t = new URL(req.url ?? '/', 'http://mock').searchParams.get('t');
   if (!tokenOk(t)) return done(false, 401, 'Unauthorized');
   if (wss.clients.size > 0 && robot.mode === 'ARMED') return done(false, 409, 'Conflict');

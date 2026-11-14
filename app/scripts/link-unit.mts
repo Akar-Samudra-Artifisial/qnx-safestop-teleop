@@ -1,7 +1,14 @@
 // Unit test for TeleopLink safety logic using a fake WebSocket + fake clock.
 // Usage: npm run test:link
 import { parseServerMessage } from '../src/protocol';
-import { createSessionClock, STALE_MS, TeleopLink, W_MAX } from '../src/net/teleopLink';
+import {
+  CONNECT_TIMEOUT_MS,
+  createSessionClock,
+  rejectReasonFromMessage,
+  STALE_MS,
+  TeleopLink,
+  W_MAX,
+} from '../src/net/teleopLink';
 
 let failures = 0;
 const check = (ok: boolean, label: string, detail = '') => {
@@ -100,6 +107,35 @@ check(axis().v === 0, 'connect zeroes v/w');
 ws = FakeWS.last!;
 ws.onclose?.();
 check(link.getSnapshot().status === 'rejected', 'close before open → rejected');
+check(link.getSnapshot().rejectReason === 'unknown', 'no status exposed → reason unknown');
+
+// Handshake status from the native error message (iOS SocketRocket / Android OkHttp).
+check(rejectReasonFromMessage('Received bad response code from server: 403.') === 'forbidden', 'iOS 403 → forbidden');
+check(rejectReasonFromMessage("Expected HTTP 101 response but was '401 Unauthorized'") === 'unauthorized', 'Android 401 → unauthorized');
+check(rejectReasonFromMessage('... 409 ...') === 'conflict', '409 → conflict');
+check(rejectReasonFromMessage(undefined) === 'unknown', 'no message → unknown');
+link.connect();
+ws = FakeWS.last!;
+(ws.onerror as unknown as (e: object) => void)?.({ message: 'Received bad response code from server: 403.' });
+ws.onclose?.();
+check(link.getSnapshot().rejectReason === 'forbidden', 'onerror 403 then close → forbidden kept');
+
+// 5 s connect timeout → rejected 'timeout' and socket closed.
+const realSetTimeout = globalThis.setTimeout;
+let pending = null as { fn: () => void; ms: number } | null;
+(globalThis as unknown as { setTimeout: unknown }).setTimeout = (fn: () => void, ms: number) => {
+  pending = { fn, ms };
+  return 1;
+};
+link.connect();
+ws = FakeWS.last!;
+(globalThis as unknown as { setTimeout: unknown }).setTimeout = realSetTimeout;
+check(pending?.ms === CONNECT_TIMEOUT_MS && link.getSnapshot().status === 'connecting', 'connect arms 5 s timer');
+pending!.fn();
+check(
+  link.getSnapshot().status === 'rejected' && link.getSnapshot().rejectReason === 'timeout' && ws.readyState === 3,
+  'not open after 5 s → rejected timeout, socket closed',
+);
 
 check(parseServerMessage(JSON.stringify({ ...state('ARMED'), pose: { x: 'a', y: 0, theta: 0 } })) === null, 'invalid pose ignored');
 check(parseServerMessage(JSON.stringify({ ...state('ARMED'), vel: { v: 1 } })) === null, 'missing vel.w ignored');

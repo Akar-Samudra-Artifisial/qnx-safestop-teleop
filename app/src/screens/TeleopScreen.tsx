@@ -16,7 +16,7 @@ import HoldButton from '../components/HoldButton';
 import Joystick from '../components/Joystick';
 import StatusStrip from '../components/StatusStrip';
 import TopDownMap from '../components/TopDownMap';
-import { buildLinkUrl } from '../net/teleopLink';
+import { buildLinkUrl, type RejectReason } from '../net/teleopLink';
 import { useTeleopLink } from '../net/useTeleopLink';
 import { colors, font, radius, space, touchMin } from '../theme';
 
@@ -27,7 +27,7 @@ interface TeleopScreenProps {
   token: string;
   onExit: () => void;
   /** First connection attempt never opened (bad token / robot in use / unreachable). */
-  onRejected: () => void;
+  onRejected: (reason: RejectReason) => void;
 }
 
 export default function TeleopScreen({ address, token, onExit, onRejected }: TeleopScreenProps) {
@@ -36,8 +36,8 @@ export default function TeleopScreen({ address, token, onExit, onRejected }: Tel
 
   useEffect(() => {
     if (snap.status === 'open') everOpened.current = true;
-    else if (snap.status === 'rejected' && !everOpened.current) onRejected();
-  }, [snap.status, onRejected]);
+    else if (snap.status === 'rejected' && !everOpened.current) onRejected(snap.rejectReason ?? 'unknown');
+  }, [snap.status, snap.rejectReason, onRejected]);
   const { width } = useWindowDimensions();
   const [mapSize, setMapSize] = useState(0);
 
