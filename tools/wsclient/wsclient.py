@@ -38,14 +38,15 @@ class HandshakeRejected(ConnectionError):
 
 
 class WsClient:
-    def __init__(self, host, port, token, origin=None):
+    def __init__(self, host, port, token, origin=None, host_header=None):
         self.sock = socket.create_connection((host, port), timeout=5)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         key = base64.b64encode(os.urandom(16)).decode()
         path = "/" if token is None else f"/?t={token}"
         extra = f"Origin: {origin}\r\n" if origin is not None else ""
+        host_header = host_header or f"{host}:{port}"
         req = (
-            f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\n"
+            f"GET {path} HTTP/1.1\r\nHost: {host_header}\r\nUpgrade: websocket\r\n"
             f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
             f"{extra}\r\n"
         )
@@ -266,9 +267,9 @@ def main():
         checks.append(ok)
         print(f"[{'PASS' if ok else 'FAIL'}] {name}{': ' + detail if detail else ''}")
 
-    def rejected_with(token, origin=None):
+    def rejected_with(token, origin=None, host_header=None):
         try:
-            WsClient(a.host, a.port, token, origin).close()
+            WsClient(a.host, a.port, token, origin, host_header).close()
             return 101
         except HandshakeRejected as e:
             return e.status
@@ -280,6 +281,18 @@ def main():
     check("missing token -> 401", st == 401, f"status {st}")
     st = rejected_with(a.token, "http://evil.example")
     check("foreign Origin -> 403", st == 403, f"status {st}")
+    # iOS (SocketRocket) sends Origin http://<host>:<port> = the WS host itself.
+    st = rejected_with(a.token, f"http://{a.host}:{a.port}")
+    check("Origin same-host diterima -> 101", st == 101, f"status {st}")
+    # DNS rebinding: attacker name resolving to the robot -> Host is a name, refused.
+    st = rejected_with(
+        a.token, f"http://evil.example:{a.port}", f"evil.example:{a.port}"
+    )
+    check(
+        "same-host Origin with non-IP Host (rebinding) -> 403",
+        st == 403,
+        f"status {st}",
+    )
 
     ws = WsClient(a.host, a.port, a.token)
     s = Session(ws)

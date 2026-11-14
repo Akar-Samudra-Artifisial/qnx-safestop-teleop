@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 #include <netinet/in.h>
@@ -607,12 +608,82 @@ static void drop_client(net_t *n, const char *why, bool lost)
         pulse(n, NET_PRIO, PULSE_CLIENT_LOST);
 }
 
-static void refuse(net_t *n, int fd, int status, const char *reason)
+/* Copy for logging: printable ASCII only (header values are attacker-controlled). */
+static void log_safe(char *dst, size_t len, const char *src)
+{
+    size_t i;
+
+    for (i = 0; i + 1 < len && src[i]; i++)
+        dst[i] = (src[i] >= 0x20 && src[i] < 0x7f) ? src[i] : '?';
+    dst[i] = '\0';
+}
+
+/* Path/token is never logged (the query carries the pairing token). */
+static void refuse(net_t *n, int fd, int status, const char *reason, const ws_request_t *r)
 {
     ws_reject(fd, status, reason);
     close(fd);
-    if (log_ok(&n->log_conn_ns))
-        logf_(SLOG2_INFO, "teleopd: handshake refused: %d %s", status, reason);
+    if (log_ok(&n->log_conn_ns)) {
+        char origin[sizeof(r->origin)], host[sizeof(r->host)];
+        log_safe(origin, sizeof(origin), r->has_origin ? r->origin : "(none)");
+        log_safe(host, sizeof(host), r->host);
+        logf_(SLOG2_INFO, "teleopd: handshake refused: %d %s (origin=%s host=%s)", status, reason, origin,
+              host);
+    }
+}
+
+/* Host header is an IPv4 literal or "localhost", optional ":port". Names other than
+ * localhost are refused so a DNS-rebinding page (attacker name -> robot IP) cannot pass
+ * the same-host Origin check. */
+static bool host_is_literal(const char *h)
+{
+    const char *colon = strchr(h, ':');
+    size_t hl = colon ? (size_t)(colon - h) : strlen(h);
+    int parts = 0, digits = 0;
+    size_t i;
+
+    if (colon) {
+        const char *p = colon + 1;
+        if (*p == '\0' || strlen(p) > 5)
+            return false;
+        for (; *p; p++)
+            if (*p < '0' || *p > '9')
+                return false;
+    }
+    if (hl == 9 && strncasecmp(h, "localhost", 9) == 0)
+        return true;
+    for (i = 0; i < hl; i++) {
+        if (h[i] >= '0' && h[i] <= '9') {
+            if (++digits > 3)
+                return false;
+        } else if (h[i] == '.' && digits > 0) {
+            parts++;
+            digits = 0;
+        } else {
+            return false;
+        }
+    }
+    return digits > 0 && parts == 3;
+}
+
+/* Allowed: no Origin (RN Android, wsclient), "null", the -o origin, or same-host
+ * (Origin == http(s)://<Host header>, e.g. iOS SocketRocket). Anything else is a foreign
+ * page (cross-site WebSocket hijacking) -> 403. */
+static bool origin_ok(const ws_request_t *r)
+{
+    const char *o = r->origin, *rest;
+
+    if (!r->has_origin || o[0] == '\0' || strcmp(o, "null") == 0)
+        return true;
+    if (g_origin[0] != '\0' && strcmp(o, g_origin) == 0)
+        return true;
+    if (strncasecmp(o, "http://", 7) == 0)
+        rest = o + 7;
+    else if (strncasecmp(o, "https://", 8) == 0)
+        rest = o + 8;
+    else
+        return false;
+    return r->host[0] != '\0' && host_is_literal(r->host) && strcasecmp(rest, r->host) == 0;
 }
 
 /* Upgrade request fully read: authenticate, then admit or refuse. Owns fd. */
@@ -620,18 +691,16 @@ static void admit(net_t *n, int fd, const ws_request_t *r)
 {
     bool replacing;
 
-    /* Browsers always send Origin; the RN app sends none. Only the -o origin is allowed. */
-    if (r->has_origin && r->origin[0] != '\0' && strcmp(r->origin, "null") != 0
-        && (g_origin[0] == '\0' || strcmp(r->origin, g_origin) != 0)) {
-        refuse(n, fd, 403, "Forbidden");
+    if (!origin_ok(r)) {
+        refuse(n, fd, 403, "Forbidden", r);
         return;
     }
     if (!ws_secure_streq(g_token, r->token)) {
-        refuse(n, fd, 401, "Unauthorized");
+        refuse(n, fd, 401, "Unauthorized", r);
         return;
     }
     if (n->conn.fd != -1 && current_mode() == MODE_ARMED) {
-        refuse(n, fd, 409, "Conflict");
+        refuse(n, fd, 409, "Conflict", r);
         return;
     }
     if (ws_accept(fd, r, SEND_TIMEOUT_MS) != 0) {

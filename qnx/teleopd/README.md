@@ -9,7 +9,8 @@ Teleop daemon (QNX 8.0, aarch64le). Design and protocol: [docs/ARCHITECTURE.md](
   Heartbeat deadline 150 ms → `SAFE_STOP` (ramp to 0, latched until `arm`); `estop` → v,w = 0 at once.
 - Talks to `simplant` with `MsgSend` (5 ms `TimerTimeout`); keeps running without it.
 - Pairing: clients connect to `ws://host:8080/?t=<token>`; the token is printed at start.
-  401 wrong token, 403 browser Origin (unless `-o`), 409 while another client is ARMED.
+  401 wrong token, 403 foreign Origin (allowed: none, `-o`, or same-host `http://<IP>:8080`
+  as sent by iOS), 409 while another client is ARMED.
   Meant for a trusted LAN only (plain ws://) — see ARCHITECTURE "Pairing & threat model".
 
 ```sh

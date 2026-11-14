@@ -223,6 +223,7 @@ int ws_pending_read(ws_pending_t *p, ws_request_t *r)
     memset(r, 0, sizeof(*r));
     get_header(p->req, "Sec-WebSocket-Key", r->key, sizeof(r->key));
     r->has_origin = get_header(p->req, "Origin", r->origin, sizeof(r->origin));
+    get_header(p->req, "Host", r->host, sizeof(r->host));
     if (strncmp(p->req, "GET ", 4) != 0 || r->key[0] == '\0') {
         ws_reject(p->fd, 400, "Bad Request");
         return -1;

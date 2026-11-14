@@ -47,6 +47,7 @@ typedef struct {
     char token[40];             /* value of query parameter "t", "" if absent */
     char origin[128];           /* "" if absent */
     int has_origin;
+    char host[128];             /* Host header, "" if absent */
 } ws_request_t;
 
 /* TCP listen socket on 0.0.0.0:port. Returns fd or -1 (errno set). */
