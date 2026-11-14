@@ -42,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (1000 trials baseline, 1021 with a `SCHED_RR` 10 hog, QEMU TCG; incl. the physical iPhone test).
 - App: hb_timeout Latency panel (teleopd `stats`, local fallback), remembers the last
   host/token (host in AsyncStorage, token in SecureStore), PLANT DOWN banner.
+- `tools/demo/record.sh`: interactive recorder for the demo video footage (iPhone Mirroring
+  window + terminal via `screencapture -v`), one clip per shot of the video script, preflight
+  of QEMU/teleopd/HAM/Metro, fail-safe (deadline 150 ms, no hog) after each segment and a
+  `shots.json` timeline for the Remotion edit. `--auto` drives the app hands-free with
+  `cliclick` inside the iPhone Mirroring window (RE-ARM hold, joystick drags, link-loss
+  toggle, E-STOP, tabs), waits on `/dev/teleop` state and aborts on Ctrl-C, mouse movement
+  or window change; `--calibrate` saves control positions to `calib.json`.
+  `--phone sim` (`DEMO_TARGET=sim`) records the iOS Simulator with `simctl io recordVideo`
+  (native resolution, no chrome) and clicks inside the device screen of the DeviceHub /
+  Simulator window (found via Accessibility); `--yes` (`DEMO_UNATTENDED=1`) skips every
+  prompt and moves a failed `--auto` take to `rejected/` before retaking it (`DEMO_RETAKES`, 2);
+  `--auto` now also covers segment a (Exit → Connect with the saved host and token).
 - Standalone QNX deadline-watchdog codelab (`docs/codelab`) with a compilable sample.
 - `run-qemu.sh`: `QEMU_SSH_PORT` / `QEMU_TELEOP_PORT` choose the host ports (default 2222 /
   8080), so a second VM can run next to the first one.
