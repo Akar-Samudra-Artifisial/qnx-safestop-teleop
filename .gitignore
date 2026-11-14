@@ -1,0 +1,22 @@
+# OS / editor
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# QNX build output
+qnx/**/*.o
+qnx/teleopd/teleopd
+qnx/simplant/simplant
+qnx/latbench/latbench
+
+# QEMU images & runtime
+tools/qemu/images/
+*.img
+*.ifs
+*.qcow2
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
