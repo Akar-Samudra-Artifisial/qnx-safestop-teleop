@@ -10,6 +10,23 @@ QEMU_SERIAL=build/qnx-image/serial.log \
 kill "$(cat build/qnx-image/qemu.pid)"                  # matikan
 ```
 
+VM yang dijalankan dengan `&`/`nohup` dari shell agen atau IDE bisa ikut mati saat sesi
+itu ditutup atau di-restart. Agar terlepas dari terminal, serahkan ke launchd (path absolut,
+karena launchd memulai di `/` dengan PATH minimal):
+
+```sh
+P=$PWD   # root repo
+launchctl submit -l com.qnx.safestop.qemu \
+  -o "$P/build/qemu-stdout.log" -e "$P/build/qemu-stderr.log" -- \
+  /usr/bin/env PATH=/opt/homebrew/bin:/usr/bin:/bin QEMU_SERIAL="$P/build/qemu.log" \
+  /bin/bash -c "cd '$P' && exec tools/qemu/run-qemu.sh -pidfile build/qnx-image/qemu.pid"
+launchctl remove com.qnx.safestop.qemu                  # matikan (stop + hapus job)
+```
+
+`launchctl submit` men-restart job bila prosesnya keluar sendiri; `launchctl remove`
+menghentikan VM dan menghapus job. Job hilang saat logout/reboot Mac. VM yang di-boot ulang
+oleh launchd belum berisi teleopd: jalankan `tools/qemu/deploy.sh` lagi.
+
 Akses (user-mode net, bind `0.0.0.0` supaya HP di LAN bisa ke 8080):
 
 ```sh
