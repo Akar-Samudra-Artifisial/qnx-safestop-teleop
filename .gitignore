@@ -9,12 +9,20 @@ qnx/**/*.o
 qnx/teleopd/teleopd
 qnx/simplant/simplant
 qnx/latbench/latbench
+tools/hello/hello
+# toolchain crash dumps (ld occasionally segfaults under amd64 emulation)
+core
 
 # QEMU images & runtime
+build/
 tools/qemu/images/
 *.img
 *.ifs
 *.qcow2
+
+# Python
+__pycache__/
+*.pyc
 
 # Secrets / local env
 .env
