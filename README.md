@@ -13,6 +13,7 @@ Entry for the QNX Global Hackathon — category **Robotics & Medical**.
 | `qnx/teleopd/` | WebSocket server + SCHED_FIFO control loop (safe-stop) |
 | `qnx/simplant/` | Simulated diff-drive plant (200 Hz), supervised by HAM |
 | `qnx/teleopctl/` | Shell client for teleopd's `/dev/teleop` resmgr (status, set-deadline, estop, reset-stats). `set-deadline` accepts 50–1000 ms: values above 150 weaken safe-stop (up to 1 s); root only, logged as WARNING |
+| `qnx/hamreg/` | Registers simplant with HAM (death → delay → restart) with a restart limit |
 | `qnx/latbench/` | CPU hog (FIFO/RR, configurable priority) for the latency bench |
 | `qnx/common/` | Shared headers (protocol, pulse codes, devctl codes) |
 | `app/` | Expo / React Native companion app (TypeScript) |

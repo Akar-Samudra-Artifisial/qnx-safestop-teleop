@@ -45,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Standalone QNX deadline-watchdog codelab (`docs/codelab`) with a compilable sample.
 
 ### Changed
+- teleopd enters SAFE_STOP (event `plant_lost`) when the plant connection fails while
+  ARMED and refuses `arm` while simplant is down.
 - `tools/qemu/run-qemu.sh` boots the mkqnximage output (ifs.bin + virtio disk) on the Mac
   with ssh on port 2222 and teleopd on 8080, reachable from the LAN; TCG by default
   because HVF currently fails in QNX startup (GICv3 assert).
@@ -79,10 +81,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   specific messages when RN exposes the status, and a 5 s connect timeout shows
   "Host tidak terjangkau".
 - App: event labels distinguish detection vs. processing time; larger robot icon.
+- HAM supervision of simplant: `qnx/hamreg` (`ham_attach`, CONDDEATH → notify, 100 ms
+  `waitfor`, `restart`; detaches after > 5 deaths in 60 s). `deploy.sh` copies `ham`,
+  `hamctrl`, `libham.so.2` from the SDP, starts `ham` + `hamreg`, stops HAM with
+  `hamctrl -stop`. slay → `plant_ok=1` again: median 571.5 ms (10 runs, QEMU TCG).
+- Mock server `--dev-plant` (`dev_plant` message on a `?dev=1` socket) simulates simplant death:
+  `plant_ok=false`, SAFE_STOP `plant_lost`, `arm` refused; smoke covers it with `SMOKE_DEV_PLANT=1`.
 - `tools/qemu/deploy.sh` also copies `teleopctl` and `latbench`; `install-qsc.sh` installs
   the HAM package (`com.qnx.qnx800.target.os_services.ham`) by default.
 
 ### Fixed
+- App event list: `plant_lost` (negative `detect_us`) shows "plant hilang" instead of a
+  negative latency; `eventLatencyLabel` moved to `app/src/format.ts` and unit-tested.
+- `hamreg -n` accepts at most 63 (the 64-slot death ring made the limit unreachable at 64).
 - teleopd `estop`: a `state` sent right after the SAFE_STOP event could still show the old
   velocity (zero setpoint is now published before the event).
 - iOS app could not connect (403): teleopd and the mock now accept a same-host `Origin`

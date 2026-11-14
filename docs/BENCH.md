@@ -61,11 +61,25 @@ Values outside 50–1000 ms are rejected with `EINVAL`.
 
 ## Plant failure (`tools/fault/slay-plant.sh`)
 
-`slay -f simplant` → teleopd reports `plant_ok=0` in `/dev/teleop` after 43 ms (MsgSend fails,
-teleopd retries `name_open` every 500 ms). Automatic restart needs HAM, which is **not installed**
-in the SDP or the image yet (package `com.qnx.qnx800.target.os_services.ham`), so the script
-reports "still 0 after 3 s". After a manual restart of simplant, `plant_ok=1` came back after
-222 and 370 ms (two runs).
+simplant runs under HAM (`qnx/hamreg`: `ham_attach` + CONDDEATH → waitfor 100 ms → restart).
+`tools/fault/slay-plant.sh`, 10 runs 15 s apart (QEMU TCG emulation, target clock), raw output
+in `build/bench/ham-slay.txt`:
+
+| Step | Result |
+|---|---|
+| slay → `plant_ok=0` | 38–88 ms (MsgSend to the dead plant fails on the next ticks) |
+| slay → `plant_ok=1` again (HAM restart + teleopd reconnect) | n=10: min 544 / median 571.5 / max 626 ms |
+
+The total is roughly the 100 ms HAM delay + spawn + teleopd's 500 ms `name_open` retry
+period; the split was not measured separately. Every run got a new simplant pid.
+
+Safety while the plant is down: an ARMED session driving at v=0.3 m/s got event
+`plant_lost` → SAFE_STOP; all `state` messages during the outage and after the restart were
+SAFE_STOP with v=0, and only a new `arm` re-armed (one scripted run).
+
+Restart limit: 6 deaths within 60 s → hamreg logged "restart limit exceeded", detached the
+entity and exited. The restart already queued for that 6th death still ran; the next slay was
+not restarted (`plant_ok=0` stays). Redeploy (`tools/qemu/deploy.sh`) to recover.
 
 ## Physical device test (iPhone)
 

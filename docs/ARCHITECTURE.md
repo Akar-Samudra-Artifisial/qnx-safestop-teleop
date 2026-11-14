@@ -79,7 +79,18 @@ Target: **QNX 8.0 aarch64le** running in QEMU (`virt` machine), app on a phone.
 Simulated differential-drive robot (10×10 m area, clamped) integrated at 200 Hz;
 `name_attach("simplant")`, receives velocity setpoints via `MsgSend` and replies with
 pose; own watchdog zeroes velocity after 200 ms without a setpoint. teleopd keeps
-running without it (`plant_ok=false`, reconnect every 500 ms). **HAM** restart: M3.
+running without it (`plant_ok=false`, reconnect every 500 ms). If the plant connection
+fails while ARMED, teleopd enters SAFE_STOP (event `plant_lost`, velocity zeroed) and
+refuses `arm` until the plant is back, so a restarted plant never resumes motion by itself.
+
+### HAM supervision (`qnx/hamreg`)
+`ham` (High Availability Manager, SDP package `com.qnx.qnx800.target.os_services.ham`) runs
+from `/data` (copied by `deploy.sh` with `libham.so.2`; it is not in the IFS image, so no
+image rebuild). `hamreg` asks HAM to start simplant (`ham_attach` with pid 0) and adds a
+CONDDEATH condition with three re-armed actions: notify pulse to hamreg, `waitfor` 100 ms,
+`restart`. HAM has no restart limit, so hamreg counts the pulses and calls
+`ham_detach_name` after more than 5 deaths in 60 s (`-d`, `-n`, `-w`). Stop HAM with
+`hamctrl -stop` (the documented way; `deploy.sh` does this).
 
 ### /dev/teleop (resource manager in teleopd)
 - **resmgr thread**, `SCHED_RR` 10: `resmgr_attach("/dev/teleop")` with the default
@@ -102,7 +113,7 @@ running without it (`plant_ok=false`, reconnect every 500 ms). **HAM** restart: 
 ### Fault injection & bench
 - `qnx/latbench` CPU hog (`pthread_setschedparam`, one busy thread per CPU) driven by
   `tools/fault/cpu-hog.sh`; `wsclient.py --bench N` runs N hb-loss trials → CSV;
-  `tools/fault/slay-plant.sh` kills simplant and times the recovery. Results:
+  `tools/fault/slay-plant.sh` kills simplant and times the HAM restart + reconnect. Results:
   [BENCH.md](BENCH.md).
 
 ## Protocol (JSON over WebSocket)

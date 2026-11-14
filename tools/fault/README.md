@@ -7,7 +7,7 @@ project ssh key (`build/qnx-image/ssh/id_ed25519`, port 2222) and expect the bin
 | Script | Fault | Measures |
 |---|---|---|
 | `cpu-hog.sh <prio> <s> [fifo\|rr] [threads]` | `qnx/latbench` busy-loop threads (one per CPU) at the given priority, set with `pthread_setschedparam()`; they stop by themselves | combine with `wsclient.py --bench N` (detect_us per trial, CSV) |
-| `slay-plant.sh [timeout_s]` | `slay -f simplant` | target-clock time until `/dev/teleop` shows `plant_ok=0`, then `plant_ok=1` again (simplant restarted by HAM + teleopd reconnect, retry 500 ms) |
+| `slay-plant.sh [timeout_s]` | `slay -f simplant` | target-clock time until `/dev/teleop` shows `plant_ok=0`, then `plant_ok=1` again (simplant restarted by HAM via `qnx/hamreg` + teleopd reconnect, retry 500 ms). hamreg stops restarting after > 5 deaths in 60 s, so space runs ≥ 12 s apart |
 
 Heartbeat loss itself needs no script: `wsclient.py` stops sending `hb` (or use the app's
 "simulate link loss" toggle).

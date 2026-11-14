@@ -225,8 +225,8 @@ watchdog from three QNX primitives: channel, pulse timer, `MsgReceive`.
 
 The full project, **qnx-safestop-teleop**, applies the same pattern to a real-time safe-stop
 loop for a phone-controlled vehicle: `qnx/teleopd/teleopd.c` (control thread at `SCHED_FIFO`
-50, `ChannelCreate` at `:1220`, 100 Hz `timer_create` + `MsgReceive` loop at `:493-501`,
-`MsgSendPulse` at `:560`), with measurements in `docs/BENCH.md` and architecture in
+50, `ChannelCreate` at `:1230`, 100 Hz `timer_create` + `MsgReceive` loop at `:503-511`,
+`MsgSendPulse` at `:570`), with measurements in `docs/BENCH.md` and architecture in
 `docs/ARCHITECTURE.md`.
 
 Ideas to extend: a lower deadline with a faster tick (`TICK_HZ`), measuring jitter on real
