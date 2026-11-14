@@ -10,6 +10,7 @@ qnx/teleopd/teleopd
 qnx/simplant/simplant
 qnx/latbench/latbench
 qnx/teleopctl/teleopctl
+qnx/hamreg/hamreg
 docs/codelab/watchdog/watchdog
 tools/hello/hello
 # toolchain crash dumps (ld occasionally segfaults under amd64 emulation)

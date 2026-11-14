@@ -11,7 +11,8 @@
  *   resmgr  (SCHED_RR 10)    /dev/teleop (0640 root): read -> status text, devctl ->
  *                            set deadline / estop (qnx/common/teleop_dcmd.h). Optional.
  *
- * Modes: DISARMED -(arm, fresh hb)-> ARMED -(hb age > deadline | estop | client lost)-> SAFE_STOP
+ * Modes: DISARMED -(arm, fresh hb, plant up)-> ARMED -(hb age > deadline | estop | client lost
+ *        | plant lost)-> SAFE_STOP
  *        SAFE_STOP stays latched until the next accepted arm. estop zeroes velocity at once;
  *        the other reasons ramp it down (see docs/ARCHITECTURE.md). */
 #include <errno.h>
@@ -362,6 +363,11 @@ static void plant_exchange(ctl_t *c, int64_t t)
         name_close(c->plant_coid);
         c->plant_coid = -1;
         c->plant_retry_ns = t + PLANT_RETRY_NS;
+        /* Latch SAFE_STOP so a restarted plant (HAM) never resumes motion without a new arm. */
+        if (c->mode == MODE_ARMED) {
+            enter_safe_stop(c, "plant_lost", -1);
+            c->v = c->w = 0;
+        }
         return;
     }
     c->pose = rep;
@@ -444,6 +450,10 @@ static void on_arm(ctl_t *c)
     }
     if (hb_rx == 0 || t - hb_rx > g_deadline_ns) {
         logf_(SLOG2_INFO, "teleopd: arm rejected: no fresh heartbeat");
+        return;
+    }
+    if (c->plant_coid == -1) {
+        logf_(SLOG2_INFO, "teleopd: arm rejected: %s not connected", SIMPLANT_NAME);
         return;
     }
     c->mode = MODE_ARMED;
