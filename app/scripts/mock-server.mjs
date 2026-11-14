@@ -39,12 +39,36 @@ const robot = {
   seqAck: 0,
 };
 
+// hb_timeout detect_us history and `stats` reply, same shape/buckets as teleopd.
+const STATS_RING = 1024;
+const STATS_LE_US = [150000, 152000, 154000, 156000, 158000, 160000, 165000, 170000, null];
+const detectRing = [];
+
+function statsMsg() {
+  const v = [...detectRing].sort((a, b) => a - b);
+  const pct = (p) => (v.length ? v[Math.max(1, Math.ceil(p * v.length)) - 1] : -1);
+  const buckets = STATS_LE_US.map((le_us) => ({ le_us, count: 0 }));
+  for (const x of v) buckets.find((b) => b.le_us === null || x <= b.le_us).count += 1;
+  return {
+    type: 'stats',
+    n: v.length,
+    p50_us: pct(0.5),
+    p99_us: pct(0.99),
+    max_us: v.length ? v[v.length - 1] : -1,
+    buckets,
+  };
+}
+
 function safeStop(reason, detectUs) {
   if (robot.mode === 'SAFE_STOP') return;
   robot.mode = 'SAFE_STOP';
   robot.sp = { v: 0, w: 0 };
   // Like teleopd: estop zeroes velocity at once, other reasons ramp down.
   if (reason === 'estop') robot.vel = { v: 0, w: 0 };
+  if (reason === 'hb_timeout') {
+    detectRing.push(detectUs);
+    if (detectRing.length > STATS_RING) detectRing.shift();
+  }
   log(`SAFE_STOP reason=${reason} detect_us=${detectUs}`);
   broadcast({ type: 'event', event: 'SAFE_STOP', reason, detect_us: detectUs });
 }
@@ -120,6 +144,9 @@ wss.on('connection', (ws, req) => {
         break;
       case 'estop':
         safeStop('estop', 0);
+        break;
+      case 'stats_req':
+        if (ws.readyState === 1) ws.send(JSON.stringify(statsMsg()));
         break;
     }
   });

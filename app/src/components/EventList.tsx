@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 
+import { fmtMs } from '../format';
 import type { LinkEvent } from '../net/teleopLink';
 import { colors, font, radius, space } from '../theme';
 
@@ -9,6 +10,15 @@ interface EventListProps {
 }
 
 const fmtTime = (ms: number) => new Date(ms).toTimeString().slice(0, 8);
+
+/**
+ * hb_timeout: detect_us = last hb → SAFE_STOP detected ("deteksi").
+ * estop/others: detect_us = command received → handled ("proses").
+ */
+export function eventLatencyLabel(reason: string, detectMs: number): string {
+  const kind = reason === 'hb_timeout' ? 'deteksi' : 'proses';
+  return `${kind} ${fmtMs(detectMs, detectMs < 10 ? 2 : 1)} ms`;
+}
 
 export default function EventList({ events, max = 3 }: EventListProps) {
   return (
@@ -22,13 +32,13 @@ export default function EventList({ events, max = 3 }: EventListProps) {
             key={e.id}
             style={styles.row}
             accessible
-            accessibilityLabel={`${fmtTime(e.at)}, ${e.reason}, detected in ${e.detectMs.toFixed(2)} milliseconds`}
+            accessibilityLabel={`${fmtTime(e.at)}, ${e.reason}, ${eventLatencyLabel(e.reason, e.detectMs)}`}
           >
             <Text style={styles.time}>{fmtTime(e.at)}</Text>
             <Text style={styles.reason} numberOfLines={1}>
               {e.reason}
             </Text>
-            <Text style={styles.detect}>{e.detectMs.toFixed(2)} ms</Text>
+            <Text style={styles.detect}>{eventLatencyLabel(e.reason, e.detectMs)}</Text>
           </View>
         ))
       )}

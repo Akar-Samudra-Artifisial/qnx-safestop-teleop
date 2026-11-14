@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -7,6 +7,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import ConnectScreen, { type ConnectTarget } from './src/screens/ConnectScreen';
 import TeleopScreen from './src/screens/TeleopScreen';
 import type { RejectReason } from './src/net/teleopLink';
+import { loadConnectTarget, saveConnectTarget } from './src/storage/connectPrefs';
 import { colors } from './src/theme';
 
 const DEFAULT_TARGET: ConnectTarget = { address: '', token: '' };
@@ -20,15 +21,26 @@ const REJECTED_MSG: Record<RejectReason, string> = {
 };
 
 export default function App() {
-  // In-memory only: the app has no persistent storage module installed.
-  const [last, setLast] = useState<ConnectTarget>(DEFAULT_TARGET);
+  // Last target persisted (host → AsyncStorage, token → SecureStore); null until loaded.
+  const [last, setLast] = useState<ConnectTarget | null>(null);
   const [active, setActive] = useState<ConnectTarget | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    loadConnectTarget()
+      .catch(() => DEFAULT_TARGET)
+      .then((t) => alive && setLast(t));
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const connect = useCallback((t: ConnectTarget) => {
     setLast(t);
     setConnectError(null);
     setActive(t);
+    void saveConnectTarget(t);
   }, []);
   const exit = useCallback(() => setActive(null), []);
   const rejected = useCallback((reason: RejectReason) => {
@@ -47,9 +59,9 @@ export default function App() {
             onExit={exit}
             onRejected={rejected}
           />
-        ) : (
+        ) : last ? (
           <ConnectScreen initial={last} connectError={connectError} onConnect={connect} />
-        )}
+        ) : null}
         <StatusBar style="light" />
       </GestureHandlerRootView>
     </SafeAreaProvider>

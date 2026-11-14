@@ -28,7 +28,12 @@ export interface EstopMsg {
   type: 'estop';
 }
 
-export type ClientMessage = HeartbeatMsg | CommandMsg | ArmMsg | EstopMsg;
+/** Client → server: request the hb_timeout latency histogram (reply: StatsMsg). */
+export interface StatsReqMsg {
+  type: 'stats_req';
+}
+
+export type ClientMessage = HeartbeatMsg | CommandMsg | ArmMsg | EstopMsg | StatsReqMsg;
 
 export type Mode = 'DISARMED' | 'ARMED' | 'SAFE_STOP';
 
@@ -66,6 +71,25 @@ export interface SafeStopEvent {
   reason: string;
   /** µs: last hb received → SAFE_STOP detected (hb_timeout), or estop received → handled. */
   detect_us: number;
+}
+
+/** One histogram bucket: samples with detect_us <= le_us (and > the previous bound). */
+export interface StatsBucket {
+  /** Upper bound, µs; null = +inf (last bucket). teleopd: 150,152,154,156,158,160,165,170 ms, +inf. */
+  le_us: number | null;
+  count: number;
+}
+
+/** Server → client reply to stats_req: detect_us of the last ≤1024 hb_timeout events
+ * (teleopd ring buffer; nearest-rank percentiles). p50/p99/max are -1 when n is 0.
+ * Parsed by net/stats.ts (not by parseServerMessage). */
+export interface StatsMsg {
+  type: 'stats';
+  n: number;
+  p50_us: number;
+  p99_us: number;
+  max_us: number;
+  buckets: StatsBucket[];
 }
 
 export type ServerMessage = StateMsg | SafeStopEvent;

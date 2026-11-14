@@ -1,6 +1,7 @@
 // Unit test for TeleopLink safety logic using a fake WebSocket + fake clock.
 // Usage: npm run test:link
 import { parseServerMessage } from '../src/protocol';
+import { parseStatsFrame, statsFromSamples } from '../src/net/stats';
 import {
   CONNECT_TIMEOUT_MS,
   createSessionClock,
@@ -141,6 +142,31 @@ check(parseServerMessage(JSON.stringify({ ...state('ARMED'), pose: { x: 'a', y: 
 check(parseServerMessage(JSON.stringify({ ...state('ARMED'), vel: { v: 1 } })) === null, 'missing vel.w ignored');
 check(parseServerMessage(JSON.stringify(state('FLYING'))) === null, 'unknown mode ignored');
 check(parseServerMessage('{"type":"state","pose":{"x":1e999,"y":0,"theta":0}}') === null, 'non-finite pose ignored');
+
+// Latency stats: server frame, local fallback, request.
+{
+  const l2 = new TeleopLink('ws://x:8080/?t=1', { now: () => t });
+  l2.connect();
+  const w2 = FakeWS.last!;
+  w2.open();
+  check(l2.requestStats() && w2.sent.at(-1)?.type === 'stats_req', 'requestStats sends stats_req');
+  w2.rx({ type: 'event', event: 'SAFE_STOP', reason: 'hb_timeout', detect_us: 156000 });
+  w2.rx({ type: 'event', event: 'SAFE_STOP', reason: 'estop', detect_us: 80 });
+  check(l2.getSnapshot().hbTimeoutUs.join() === '156000', 'only hb_timeout kept as local sample');
+  w2.rx({ type: 'stats', n: 3, p50_us: 155000, p99_us: 161000, max_us: 161000, buckets: [{ le_us: 160000, count: 2 }, { le_us: null, count: 1 }] });
+  const ss = l2.getSnapshot().serverStats;
+  check(ss?.source === 'server' && ss.n === 3 && ss.buckets[1].leUs === Infinity, 'stats frame parsed (null = inf)');
+  check(l2.getSnapshot().events.length === 2, 'stats frame not treated as event');
+  check(parseStatsFrame('{"type":"stats","n":1,"buckets":[{"le_us":"x","count":1}]}') === null, 'invalid stats ignored');
+  const loc = statsFromSamples([151000, 156000, 158000, 175000]);
+  const counts = loc.buckets.map((b) => b.count).join(',');
+  check(
+    loc.n === 4 && loc.maxUs === 175000 && loc.p50Us === 156000 && counts === '0,1,0,1,1,0,0,1',
+    'local fallback histogram',
+    counts,
+  );
+  l2.disconnect();
+}
 
 // Monotonic session clock survives wall clock going backwards.
 const realNow = Date.now;

@@ -10,8 +10,11 @@ import {
   type SafeStopEvent,
   type StateMsg,
 } from '../protocol';
+import { parseStatsFrame, type LatencyStats } from './stats';
 
 export { V_MAX, W_MAX };
+/** Local hb_timeout detect_us samples kept for the latency fallback. */
+const MAX_LOCAL_SAMPLES = 500;
 /** No `state` frame for this long while open → data considered stale. */
 export const STALE_MS = 1000;
 
@@ -70,6 +73,10 @@ export interface LinkSnapshot {
   stale: boolean;
   events: LinkEvent[];
   trail: TrailPoint[];
+  /** Last `stats` reply from teleopd; null until the server answers `stats_req`. */
+  serverStats: LatencyStats | null;
+  /** detect_us of every hb_timeout SAFE_STOP received this session (fallback histogram). */
+  hbTimeoutUs: number[];
 }
 
 export interface TeleopLinkOptions {
@@ -135,6 +142,8 @@ export class TeleopLink {
       stale: false,
       events: [],
       trail: [],
+      serverStats: null,
+      hbTimeoutUs: [],
     };
   }
 
@@ -293,6 +302,11 @@ export class TeleopLink {
     this.send({ type: 'estop' });
   }
 
+  /** Ask teleopd for its hb_timeout latency histogram (reply: `stats`). */
+  requestStats(): boolean {
+    return this.send({ type: 'stats_req' });
+  }
+
   // --- internals ---
   private send(msg: ClientMessage): boolean {
     const ws = this.ws;
@@ -320,6 +334,12 @@ export class TeleopLink {
   };
 
   private handleFrame(raw: string) {
+    const stats = parseStatsFrame(raw);
+    if (stats) {
+      this.lastRxAt = this.now();
+      this.update({ serverStats: stats });
+      return;
+    }
     const msg = parseServerMessage(raw);
     if (!msg) return;
     const now = this.now();
@@ -346,6 +366,7 @@ export class TeleopLink {
       });
       return;
     }
+    if (msg.type !== 'event') return;
 
     this.inhibit = true;
     this.zeroAxis();
@@ -356,7 +377,11 @@ export class TeleopLink {
       detectMs: msg.detect_us / 1000,
       at: now,
     };
-    this.update({ events: [ev, ...this.snap.events].slice(0, MAX_EVENTS) });
+    const hbTimeoutUs =
+      msg.reason === 'hb_timeout'
+        ? [...this.snap.hbTimeoutUs, msg.detect_us].slice(-MAX_LOCAL_SAMPLES)
+        : this.snap.hbTimeoutUs;
+    this.update({ events: [ev, ...this.snap.events].slice(0, MAX_EVENTS), hbTimeoutUs });
     this.opts.onSafeStop?.(msg);
   }
 }

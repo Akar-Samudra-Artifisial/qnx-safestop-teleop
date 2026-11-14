@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import Svg, { G, Line, Polygon, Polyline, Rect } from 'react-native-svg';
+import Svg, { Circle, G, Line, Polygon, Polyline, Rect } from 'react-native-svg';
 
 import type { Pose } from '../protocol';
 import type { TrailPoint } from '../net/teleopLink';
@@ -31,8 +31,9 @@ function TopDownMap({ size, pose, trail, extentM = 10 }: TopDownMapProps) {
     );
   }
 
-  const robotLen = 0.5 * s;
-  const robotW = 0.36 * s;
+  // Icon, not to scale: ~2.5× the old 0.5 m dart, never below 28 px.
+  const robotLen = Math.max(28, 1.25 * s);
+  const robotW = robotLen * 0.75;
 
   return (
     <Svg
@@ -60,11 +61,15 @@ function TopDownMap({ size, pose, trail, extentM = 10 }: TopDownMapProps) {
         <G
           transform={`translate(${(pose.x + half) * s} ${(half - pose.y) * s}) rotate(${(-pose.theta * 180) / Math.PI})`}
         >
+          {/* Dark halo keeps the icon readable over grid and trail. */}
+          <Circle r={robotLen * 0.55} fill={colors.bg} fillOpacity={0.55} stroke={colors.accent} strokeWidth={2} />
+          {/* Notched dart: tip = heading. */}
           <Polygon
-            points={`${robotLen * 0.6},0 ${-robotLen * 0.4},${robotW / 2} ${-robotLen * 0.4},${-robotW / 2}`}
+            points={`${robotLen * 0.6},0 ${-robotLen * 0.4},${robotW / 2} ${-robotLen * 0.18},0 ${-robotLen * 0.4},${-robotW / 2}`}
             fill={colors.text}
             stroke={colors.bg}
-            strokeWidth={1.5}
+            strokeWidth={2.5}
+            strokeLinejoin="round"
           />
         </G>
       )}

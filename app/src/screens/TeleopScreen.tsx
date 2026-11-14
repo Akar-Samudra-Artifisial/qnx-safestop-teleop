@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Pressable,
   StyleSheet,
@@ -14,11 +14,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import EventList from '../components/EventList';
 import HoldButton from '../components/HoldButton';
 import Joystick from '../components/Joystick';
+import LatencyPanel from '../components/LatencyPanel';
 import StatusStrip from '../components/StatusStrip';
 import TopDownMap from '../components/TopDownMap';
+import { statsFromSamples } from '../net/stats';
 import { buildLinkUrl, type RejectReason } from '../net/teleopLink';
 import { useTeleopLink } from '../net/useTeleopLink';
 import { colors, font, radius, space, touchMin } from '../theme';
+
+const STATS_POLL_MS = 2000;
 
 interface TeleopScreenProps {
   /** host:port of teleopd. */
@@ -59,6 +63,21 @@ export default function TeleopScreen({ address, token, onExit, onRejected }: Tel
   const onReconnect = useCallback(() => link.connect(), [link]);
   const onLinkLoss = useCallback((on: boolean) => link.setLinkLossSim(on), [link]);
 
+  const [showLatency, setShowLatency] = useState(false);
+  const toggleLatency = useCallback(() => setShowLatency((s) => !s), []);
+  // Poll teleopd for its histogram every 2 s while the panel is visible.
+  useEffect(() => {
+    if (!showLatency || !open) return;
+    link.requestStats();
+    const id = setInterval(() => link.requestStats(), STATS_POLL_MS);
+    return () => clearInterval(id);
+  }, [showLatency, open, link]);
+  const latency = useMemo(
+    () => snap.serverStats ?? statsFromSamples(snap.hbTimeoutUs),
+    [snap.serverStats, snap.hbTimeoutUs],
+  );
+  const plantDown = open && !snap.stale && st?.plant_ok === false;
+
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom', 'left', 'right']}>
       <View style={styles.header}>
@@ -81,6 +100,15 @@ export default function TeleopScreen({ address, token, onExit, onRejected }: Tel
           </Pressable>
         )}
         <Pressable
+          onPress={toggleLatency}
+          accessibilityRole="button"
+          accessibilityLabel={showLatency ? 'Show map' : 'Show latency histogram'}
+          accessibilityState={{ selected: showLatency }}
+          style={({ pressed }) => [styles.ghostBtn, showLatency && styles.ghostBtnOn, pressed && styles.pressed]}
+        >
+          <Text style={styles.ghostBtnText}>{showLatency ? 'Peta' : 'Latency'}</Text>
+        </Pressable>
+        <Pressable
           onPress={onExit}
           accessibilityRole="button"
           accessibilityLabel="Disconnect and go back"
@@ -99,16 +127,28 @@ export default function TeleopScreen({ address, token, onExit, onRejected }: Tel
         stale={snap.stale}
       />
 
-      <View style={styles.mapBox} onLayout={onMapLayout}>
-        {mapSize > 0 && <TopDownMap size={mapSize} pose={st?.pose ?? null} trail={snap.trail} />}
-        {st && (
-          <Text style={styles.mapReadout} accessible={false}>
-            v {st.vel.v.toFixed(2)} m/s · w {st.vel.w.toFixed(2)} rad/s
-          </Text>
-        )}
-      </View>
+      {plantDown && (
+        <View style={styles.plantBanner} accessibilityRole="alert" accessibilityLiveRegion="assertive">
+          <Text style={styles.plantBannerText}>PLANT DOWN — restarting</Text>
+          <Text style={styles.plantBannerSub}>HAM is restarting simplant; motion is held.</Text>
+        </View>
+      )}
 
-      <EventList events={snap.events} />
+      {showLatency ? (
+        <LatencyPanel stats={latency} waitingForServer={!snap.serverStats} />
+      ) : (
+        <>
+          <View style={styles.mapBox} onLayout={onMapLayout}>
+            {mapSize > 0 && <TopDownMap size={mapSize} pose={st?.pose ?? null} trail={snap.trail} />}
+            {st && (
+              <Text style={styles.mapReadout} accessible={false}>
+                v {st.vel.v.toFixed(2)} m/s · w {st.vel.w.toFixed(2)} rad/s
+              </Text>
+            )}
+          </View>
+          <EventList events={snap.events} />
+        </>
+      )}
 
       <View style={styles.switchRow}>
         <Text style={styles.switchLabel} nativeID="linkLossLabel">
@@ -182,6 +222,15 @@ const styles = StyleSheet.create({
   accentBtn: { backgroundColor: colors.accent, borderColor: colors.accent },
   accentBtnText: { color: colors.onAccent, fontSize: font.md, fontWeight: '800' },
   pressed: { opacity: 0.7 },
+  ghostBtnOn: { borderColor: colors.accent, backgroundColor: colors.surfaceRaised },
+  plantBanner: {
+    backgroundColor: colors.danger,
+    borderRadius: radius.md,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+  },
+  plantBannerText: { color: colors.onDanger, fontSize: font.lg, fontWeight: '900', letterSpacing: 1 },
+  plantBannerSub: { color: colors.onDanger, fontSize: font.sm, fontWeight: '600' },
   mapBox: { flex: 1, minHeight: 140, alignItems: 'center', justifyContent: 'center' },
   mapReadout: {
     position: 'absolute',
