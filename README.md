@@ -64,12 +64,16 @@ colima only shares `$HOME` with its VM (`tools/sdp/run.sh` refuses other locatio
    (`qnxsoftwarecenter_clt -addLicenseKey`, key from `QNX_LICENSE_KEY` or a hidden prompt),
    installs baseline `com.qnx.qnx800` into `~/qnx/qnx800` plus the required packages
    `target.qemuvirt`, `target.driver.virtio.devb`, `target.driver.virtio.startup`,
-   `target.net.openSSH` and `target.os_services.ham` (HAM; `deploy.sh` copies `ham`,
-   `hamctrl`, `libham.so.2` from it). Already have the SDP? Put it at `~/qnx/qnx800` and
+   `target.net.openSSH` and `target.os_services.ham` (HAM; `make-image.sh` puts `ham`,
+   `hamctrl`, `libham.so.2` from it into the image). Already have the SDP? Put it at `~/qnx/qnx800` and
    install the packages above. Details: [tools/sdp/README.md](tools/sdp/README.md).
-3. **Build** (aarch64le, `-Wall -Wextra`, expect 0 warnings) and the QEMU image:
+3. **Build** (aarch64le, `-Wall -Wextra`, expect 0 warnings) and the QEMU image. The image
+   starts ham, simplant (under HAM) and teleopd (deadline 150 ms) at boot, so there is no
+   deploy step. Pick a pairing token now, or leave `TELEOP_TOKEN` unset and read the random
+   one from the serial log in step 4:
    ```sh
    tools/sdp/run.sh make -C qnx
+   export TELEOP_TOKEN=<6 digits>                   # optional; never commit it
    tools/sdp/run.sh /work/tools/sdp/make-image.sh   # build/qnx-image/output/{ifs.bin,disk-qemu.vmdk}
    ```
    Under amd64 emulation (qemu-user) `as`/`ld` occasionally die with `caught signal 11`; this
@@ -78,24 +82,29 @@ colima only shares `$HOME` with its VM (`tools/sdp/run.sh` refuses other locatio
    ```sh
    QEMU_SERIAL=build/qnx-image/serial.log tools/qemu/run-qemu.sh -pidfile build/qnx-image/qemu.pid &
    until grep -q 'Startup complete' build/qnx-image/serial.log 2>/dev/null; do sleep 1; done; sleep 10
+   grep -a 'Pairing token' build/qnx-image/serial.log    # random token (if TELEOP_TOKEN was unset)
+   export TELEOP_TOKEN=<that token>                       # only in that case
    ```
    Ports default to `127.0.0.1:2222`→22 and `0.0.0.0:8080`→8080 (LAN, for the phone). If
-   they are taken, add `QEMU_SSH_PORT=2223 QEMU_TELEOP_PORT=8081` here, `QNX_SSH_PORT=2223`
-   to `deploy.sh`, `-p 2223` to `ssh` and `--port 8081` to `wsclient.py`/the smoke URL.
-5. **Deploy and test** teleopd + simplant under HAM:
+   they are taken, add `QEMU_SSH_PORT=2223 QEMU_TELEOP_PORT=8082` here (8081 is Metro's),
+   `QNX_SSH_PORT=2223` to `deploy.sh`, `-p 2223` to `ssh` and `--port 8082` to
+   `wsclient.py`/the smoke URL.
+5. **Test** teleopd + simplant under HAM (already running; `wsclient.py` reads `TELEOP_TOKEN`):
    ```sh
-   TELEOP_TOKEN=123456 tools/qemu/deploy.sh
-   python3 tools/wsclient/wsclient.py --token 123456          # ends with "20/20 checks passed"
-   python3 tools/wsclient/wsclient.py --token 123456 --bench 1000 --csv build/bench/run.csv
+   python3 tools/wsclient/wsclient.py                         # ends with "20/20 checks passed"
+   python3 tools/wsclient/wsclient.py --bench 1000 --csv build/bench/run.csv
    ssh -i build/qnx-image/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
      -o UserKnownHostsFile=/dev/null -p 2222 root@localhost cat /dev/teleop
    ```
+   Changed the QNX code? `tools/sdp/run.sh make -C qnx && tools/qemu/deploy.sh` updates the
+   running VM (same start script, no duplicate processes, keeps the token unless
+   `TELEOP_TOKEN` is set); rebuilding the image works too.
 6. **App** (no device needed for the checks):
    ```sh
    cd app && npm ci && npm run typecheck && npm run lint && npm run test:link   # "ALL PASS"
    npm run mock -- --port 8090 &                     # mock teleopd (8080 is QEMU's)
    npm run smoke -- ws://localhost:8090              # all PASS; kill %1 afterwards
-   TELEOP_TOKEN=123456 npm run smoke -- ws://localhost:8080   # same smoke against the VM
+   npm run smoke -- ws://localhost:8080              # same smoke against the VM (TELEOP_TOKEN)
    npx expo start                                    # Expo Go on a phone in the same LAN
    ```
 7. **Codelab** watchdog: `tools/sdp/run.sh make -C /work/docs/codelab/watchdog`, then run it

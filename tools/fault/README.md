@@ -2,7 +2,7 @@
 
 Fault injection for the safe-stop demos. All scripts talk to the QEMU target over the
 project ssh key (`build/qnx-image/ssh/id_ed25519`, port 2222) and expect the binaries in
-`/data` (`QNX_DEST=/data tools/qemu/deploy.sh`).
+`/data` (there at boot from the image; updated by `tools/qemu/deploy.sh`).
 
 | Script | Fault | Measures |
 |---|---|---|

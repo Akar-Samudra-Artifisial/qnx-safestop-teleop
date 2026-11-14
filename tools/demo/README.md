@@ -12,7 +12,8 @@ iPhone Mirroring window, plus terminal shots, one `.mov` per segment, for editin
 - System Settings → Privacy & Security → **Accessibility**: allow your terminal app, so the
   script can read the iPhone Mirroring / terminal window position (or set `DEMO_PHONE_RECT`).
 - QEMU target running with teleopd, simplant and HAM in `/data`
-  (`QNX_DEST=/data TELEOP_TOKEN=... tools/qemu/deploy.sh`, see [tools/qemu](../qemu/README.md)).
+  (the image starts them at boot; after a rebuild of the binaries:
+  `TELEOP_TOKEN=... tools/qemu/deploy.sh`, see [tools/qemu](../qemu/README.md)).
 - Metro running (`cd app && npm start`) and the app open on the iPhone.
 - Optional: `ffprobe` (Homebrew `ffmpeg`) to print the duration of each saved clip.
 - For `--auto` / `--calibrate`: `brew install cliclick`, and the Accessibility permission

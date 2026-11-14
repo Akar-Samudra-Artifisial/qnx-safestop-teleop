@@ -60,6 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tools/sdp/run.sh` refuses a repo or QNX home outside `$HOME` (colima mounts only
   `$HOME`, so it would otherwise run against an empty `/work`); `QNX_SKIP_MOUNT_CHECK=1`
   overrides.
+- The QEMU image starts ham, simplant (under HAM) and teleopd (deadline 150 ms) at boot from
+  `/data` (`tools/qemu/teleop-start.sh`), so no manual deploy is needed. Pairing token: from
+  `TELEOP_TOKEN` at image build, or 6 random digits generated on first boot, stored in
+  `/data/teleop.token` and printed as `Pairing token: NNNNNN` on the serial console.
+- `docs/BENCH.md` §Priority-50 investigation: two FIFO 50 hogs delay detection by the hog
+  duration (3001–3045 ms for 3 s, 5004–5040 ms for 5 s; control thread `READY` in `pidin`);
+  explains why the codelab sample did not show it.
 - README "Reproduce in 7 steps" (prerequisites, SDP packages incl. HAM, alternate ports,
   app checks, mock smoke, codelab), verified from a fresh clone.
 
@@ -118,6 +125,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `plant_ok=false`, SAFE_STOP `plant_lost`, `arm` refused; smoke covers it with `SMOKE_DEV_PLANT=1`.
 - `tools/qemu/deploy.sh` also copies `teleopctl` and `latbench`; `install-qsc.sh` installs
   the HAM package (`com.qnx.qnx800.target.os_services.ham`) by default.
+- `tools/qemu/deploy.sh` installs to `/data` by default (was `/tmp`), restarts through the same
+  `teleop-start.sh` as the boot (no duplicate processes) and keeps the target's token when
+  `TELEOP_TOKEN` is unset; `tools/sdp/run.sh` passes `TELEOP_TOKEN` into the container.
+- `tools/sdp/make-image.sh` always rebuilds the image (resets `/data`); mkqnximage alone
+  skipped rebuilds when only files changed.
 
 ### Fixed
 - App event list: `plant_lost` (negative `detect_us`) shows "plant hilang" instead of a
@@ -128,6 +140,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - iOS app could not connect (403): teleopd and the mock now accept a same-host `Origin`
   (`http(s)://<Host>`, Host = IPv4 literal/localhost); foreign Origins and DNS-rebinding
   names stay 403. Handshake refusals log status, Origin and Host.
+- `tools/qemu/deploy.sh` right after a boot could fail with `scp: dest open "/data/teleopd":
+  Failure`; files are now copied to `/data/.deploy` and renamed into place.
+- `tools/sdp/make-image.sh` retries when the SDP `cpp` crashes under amd64 emulation
+  (mkqnximage carried on with an empty `data.build`, leaving root SSH login broken).
 
 ### Security
 - teleopd requires a 6-digit pairing token (`ws://host:8080/?t=<token>`, random at start or

@@ -19,5 +19,5 @@ teleopd [-p 8080] [-d 150] [-t token] [-o origin] [-v]
 #        allowed browser Origin (e.g. http://localhost:8081), also log to stdout
 ```
 
-Build (from the repo root): `tools/sdp/run.sh make -C qnx` (SDP env sourced by run.sh). Deploy: `TELEOP_TOKEN=123456 tools/qemu/deploy.sh`.
+Build (from the repo root): `tools/sdp/run.sh make -C qnx` (SDP env sourced by run.sh). Run: the QEMU image starts it at boot (`tools/qemu/README.md`); after rebuilding, update the running VM with `TELEOP_TOKEN=123456 tools/qemu/deploy.sh`.
 Test: `tools/wsclient/wsclient.py --token 123456 --trials 20`. Logs: `slog2info` on the target.
