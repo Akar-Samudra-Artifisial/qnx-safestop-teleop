@@ -4,7 +4,7 @@ CC      = qcc
 TARGET  = -Vgcc_ntoaarch64le
 CFLAGS  = $(TARGET) -Wall -Wextra -O2 -I../common
 LDFLAGS = $(TARGET)
-LDLIBS  = -lm
+LDLIBS  = -lm -lslog2
 
 BIN  = simplant
 SRCS = $(wildcard *.c)

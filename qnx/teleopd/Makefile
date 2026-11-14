@@ -1,13 +1,15 @@
-# QNX SDP 8.0 aarch64le — skeleton, not compiled yet.
+# QNX SDP 8.0 aarch64le.
 # Requires: source <qnxsdp-env.sh> so qcc and QNX_TARGET are available.
 CC      = qcc
 TARGET  = -Vgcc_ntoaarch64le
 CFLAGS  = $(TARGET) -Wall -Wextra -O2 -I../common
 LDFLAGS = $(TARGET)
-LDLIBS  = -lwebsockets
+LDLIBS  = -lm -lsocket -lslog2
+
+vpath %.c ../common
 
 BIN  = teleopd
-SRCS = $(wildcard *.c)
+SRCS = teleopd.c ws.c json.c
 OBJS = $(SRCS:.c=.o)
 
 all: $(BIN)
@@ -15,7 +17,7 @@ all: $(BIN)
 $(BIN): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-%.o: %.c
+%.o: %.c ../common/ws.h ../common/json.h ../common/proto.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
