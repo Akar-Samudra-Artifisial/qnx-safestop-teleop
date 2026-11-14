@@ -52,6 +52,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app checks, mock smoke, codelab), verified from a fresh clone.
 
 ### Changed
+- App UI redesign for the demo, English text throughout and point decimals
+  (`156.0 ms`). Teleop screen now has: a large mode card (ARMED / SAFE STOP /
+  DISARMED / LINK DOWN) that says why the robot stopped in plain English and how long
+  detection took; metric chips (RTT, heartbeat age against the 150 ms deadline, plant,
+  stop p99); Map / Latency / Events tabs so the main screen stays uncluttered; a bigger
+  E-STOP that is always visible; RE-ARM highlighted when it is the next step; and the
+  joystick dimmed with a "Hold RE-ARM to drive" hint when driving is not allowed.
+  Connect screen gets a stop-octagon mark, a 6-box pairing-code input, field hints and
+  clearer rejection messages. The layout fits an iPhone SE (375×667) without scrolling.
+  Safety and protocol behaviour are unchanged.
 - teleopd enters SAFE_STOP (event `plant_lost`) when the plant connection fails while
   ARMED and refuses `arm` while simplant is down.
 - `tools/qemu/run-qemu.sh` boots the mkqnximage output (ifs.bin + virtio disk) on the Mac
