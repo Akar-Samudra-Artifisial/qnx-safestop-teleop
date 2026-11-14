@@ -16,6 +16,20 @@ if ! colima status -p qnx >/dev/null 2>&1; then
   exit 1
 fi
 
+# colima shares only $HOME with its VM by default: a repo or QNX home elsewhere (e.g. /tmp)
+# is mounted as an empty directory and every command fails with "No such file or directory".
+# QNX_SKIP_MOUNT_CHECK=1 skips this when extra colima mounts are configured.
+if [[ "${QNX_SKIP_MOUNT_CHECK:-0}" != "1" ]]; then
+  for d in "$REPO_DIR" "$QNX_HOME"; do
+    case "$d/" in
+      "$HOME"/*) ;;
+      *) echo "error: $d is outside \$HOME; colima only mounts \$HOME into the VM." >&2
+         echo "  Clone the repo under \$HOME (or set QNX_SKIP_MOUNT_CHECK=1 if you added a colima mount)." >&2
+         exit 1 ;;
+    esac
+  done
+fi
+
 docker_q() { docker --context "$CONTEXT" "$@"; }
 
 if [[ "${1:-}" == "build" ]]; then

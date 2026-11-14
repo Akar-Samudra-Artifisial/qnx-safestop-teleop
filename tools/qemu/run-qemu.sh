@@ -10,6 +10,8 @@
 #        QEMU_MACHINE (virt; mkqnximage uses virt-4.2, removed in QEMU 11)
 #        QEMU_MEM (1G), QEMU_SMP (2), QEMU_HOSTFWD_ADDR (8080; 0.0.0.0 = reachable from LAN),
 #        QEMU_SSH_FWD_ADDR (2222; default 127.0.0.1 = this Mac only)
+#        QEMU_SSH_PORT (host port -> guest 22, default 2222; pass the same value to deploy.sh
+#        as QNX_SSH_PORT), QEMU_TELEOP_PORT (host port -> guest 8080, default 8080)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,6 +23,11 @@ SMP="${QEMU_SMP:-2}"
 FWD_ADDR="${QEMU_HOSTFWD_ADDR:-0.0.0.0}"          # teleopd 8080: the phone reaches it over LAN
 SSH_FWD_ADDR="${QEMU_SSH_FWD_ADDR:-127.0.0.1}"    # ssh 2222: host only (root login)
 SERIAL="${QEMU_SERIAL:-stdio}"
+SSH_PORT="${QEMU_SSH_PORT:-2222}"
+TELEOP_PORT="${QEMU_TELEOP_PORT:-8080}"
+for p in "$SSH_PORT" "$TELEOP_PORT"; do
+  [[ "$p" =~ ^[0-9]{1,5}$ ]] && (( p >= 1 && p <= 65535 )) || { echo "error: invalid host port '$p' (QEMU_SSH_PORT/QEMU_TELEOP_PORT)" >&2; exit 2; }
+done
 
 for f in "$OUT/ifs.bin" "$OUT/disk-qemu.vmdk"; do
   [[ -f "$f" ]] || { echo "error: $f not found; build it with: tools/sdp/run.sh /work/tools/sdp/make-image.sh" >&2; exit 1; }
@@ -44,14 +51,14 @@ else
   CONSOLE_ARGS=(-display none -serial "file:$SERIAL" -monitor none)
 fi
 
-# User-mode net: 2222 -> 22 = ssh, 8080 = teleopd WebSocket.
+# User-mode net: $SSH_PORT -> 22 = ssh, $TELEOP_PORT -> 8080 = teleopd WebSocket.
 exec qemu-system-aarch64 \
   -machine "$MACHINE" \
   "${ACCEL_ARGS[@]}" \
   -smp "$SMP" -m "$MEM" \
   -kernel "$OUT/ifs.bin" \
   -drive "file=$OUT/disk-qemu.vmdk,if=none,id=drv0" -device virtio-blk-device,drive=drv0 \
-  -netdev "user,id=net0,hostfwd=tcp:$SSH_FWD_ADDR:2222-:22,hostfwd=tcp:$FWD_ADDR:8080-:8080" \
+  -netdev "user,id=net0,hostfwd=tcp:$SSH_FWD_ADDR:$SSH_PORT-:22,hostfwd=tcp:$FWD_ADDR:$TELEOP_PORT-:8080" \
   -device virtio-net-device,netdev=net0 \
   -object rng-random,filename=/dev/urandom,id=rng0 -device virtio-rng-device,rng=rng0 \
   "${CONSOLE_ARGS[@]}" \
