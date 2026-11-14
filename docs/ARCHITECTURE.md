@@ -61,8 +61,12 @@ Target: **QNX 8.0 aarch64le** running in QEMU (`virt` machine), app on a phone.
   `-t <token>`) to stdout and slog2. The client must connect to `ws://host:8080/?t=<token>`;
   a wrong/missing token → HTTP 401 (constant-time compare).
 - A non-empty `Origin` other than `null` → 403 (blocks drive-by pages in a browser on the
-  same LAN). The RN app sends no `Origin`; a web dev build can be allowed with
-  `-o http://localhost:8081`.
+  same LAN), except: the `-o` origin (e.g. a web dev build, `-o http://localhost:8081`) and
+  **same-host** `Origin == http(s)://<Host header>` — RN on iOS (SocketRocket) sends
+  `Origin: http://<ip>:8080`, RN on Android sends none. Same-host is only accepted when `Host`
+  is an IPv4 literal or `localhost` (optional `:port`): a DNS-rebinding page uses its own
+  name as Host/Origin and is still refused. Refusals are logged (1/s) with status, Origin
+  and Host; the request path is never logged because it carries the token.
 - One operator: while a session is `ARMED`, a second client gets 409; when not `ARMED` a
   new authenticated client replaces the old one.
 - Scope: the token protects against casual access on a **trusted LAN** (demo Wi‑Fi). It is

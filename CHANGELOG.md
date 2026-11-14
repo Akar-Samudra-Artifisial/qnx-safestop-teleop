@@ -61,6 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tools/wsclient/wsclient.py` takes `--token`/`TELEOP_TOKEN` and also checks 401/403/409,
   NaN rejection, immediate estop and the arm+estop race; `deploy.sh` passes `TELEOP_TOKEN` as `-t`.
 
+- App: no default robot address (placeholder only); handshake refusals show 401/403/409
+  specific messages when RN exposes the status, and a 5 s connect timeout shows
+  "Host tidak terjangkau".
+
+### Fixed
+- iOS app could not connect (403): teleopd and the mock now accept a same-host `Origin`
+  (`http(s)://<Host>`, Host = IPv4 literal/localhost); foreign Origins and DNS-rebinding
+  names stay 403. Handshake refusals log status, Origin and Host.
+
 ### Security
 - teleopd requires a 6-digit pairing token (`ws://host:8080/?t=<token>`, random at start or
   `-t`), compared in constant time (401); refuses browser `Origin`s except `-o` (403) and a
