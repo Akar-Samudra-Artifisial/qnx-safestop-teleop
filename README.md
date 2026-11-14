@@ -12,11 +12,12 @@ Entry for the QNX Global Hackathon — category **Robotics & Medical**.
 |---|---|
 | `qnx/teleopd/` | WebSocket server + SCHED_FIFO control loop (safe-stop) |
 | `qnx/simplant/` | Simulated diff-drive plant (200 Hz), supervised by HAM |
-| `qnx/latbench/` | Latency benchmark (p50/p99/max under CPU hog) — stretch |
-| `qnx/common/` | Shared headers (protocol, pulse codes) |
+| `qnx/teleopctl/` | Shell client for teleopd's `/dev/teleop` resmgr (status, set-deadline, estop, reset-stats). `set-deadline` accepts 50–1000 ms: values above 150 weaken safe-stop (up to 1 s); root only, logged as WARNING |
+| `qnx/latbench/` | CPU hog (FIFO/RR, configurable priority) for the latency bench |
+| `qnx/common/` | Shared headers (protocol, pulse codes, devctl codes) |
 | `app/` | Expo / React Native companion app (TypeScript) |
 | `tools/qemu/` | Run the QNX image under QEMU (aarch64, hvf/tcg) |
-| `tools/fault/` | Fault injection scripts (network drop, process kill) |
+| `tools/fault/` | Fault injection: `cpu-hog.sh` (priority experiments), `slay-plant.sh` (kill simplant, time recovery) — see [tools/fault/README.md](tools/fault/README.md) |
 | `tools/sdp/` | QNX SDP setup helpers |
 | `docs/` | Architecture, benchmarks, QNX API evidence, codelab |
 
@@ -41,6 +42,8 @@ tools/sdp/run.sh make -C qnx
 QEMU_SERIAL=build/qnx-image/serial.log tools/qemu/run-qemu.sh &
 TELEOP_TOKEN=123456 tools/qemu/deploy.sh
 python3 tools/wsclient/wsclient.py --token 123456
+python3 tools/wsclient/wsclient.py --token 123456 --bench 1000 --csv build/bench/run.csv
+ssh -i build/qnx-image/ssh/id_ed25519 -p 2222 root@localhost cat /dev/teleop
 ```
 
 ## License

@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `make -C qnx` builds all QNX packages; `tools/qemu/deploy.sh` copies and starts them
   on the QEMU target; `tools/wsclient/wsclient.py` measures SAFE_STOP detection latency
   and checks estop / re-arm behaviour.
+- Protocol `stats_req` → `stats` (`n`, `p50_us`, `p99_us`, `max_us`, `buckets[{le_us,count}]`):
+  teleopd keeps the `detect_us` of the last 1024 `hb_timeout` events and answers with a
+  histogram (buckets 150–170 ms + inf); the mock server does too; types in `protocol.ts`.
+- teleopd resource manager `/dev/teleop` (own thread, node 0640 root): `cat` shows the status
+  (mode, heartbeat age, deadline, pose, plant, events, detect p50/p99/max); devctl
+  `DCMD_TELEOP_SET_DEADLINE` (50–1000 ms), `DCMD_TELEOP_ESTOP` and `DCMD_TELEOP_RESET_STATS`
+  (empties the detect ring); new `teleopctl` tool (`status`, `set-deadline`, `estop`, `reset-stats`).
+- `qnx/latbench` CPU hog (FIFO/RR, any priority), `tools/fault/cpu-hog.sh`,
+  `tools/fault/slay-plant.sh`; `wsclient.py --bench N --csv` runs N hb-loss trials and
+  checks the `stats` reply; results in `docs/BENCH.md` with CSVs in `docs/bench/`
+  (1000 trials baseline, 1021 with a `SCHED_RR` 10 hog, QEMU TCG; incl. the physical iPhone test).
+- App: hb_timeout Latency panel (teleopd `stats`, local fallback), remembers the last
+  host/token (host in AsyncStorage, token in SecureStore), PLANT DOWN banner.
+- Standalone QNX deadline-watchdog codelab (`docs/codelab`) with a compilable sample.
 
 ### Changed
 - `tools/qemu/run-qemu.sh` boots the mkqnximage output (ifs.bin + virtio disk) on the Mac
@@ -64,8 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - App: no default robot address (placeholder only); handshake refusals show 401/403/409
   specific messages when RN exposes the status, and a 5 s connect timeout shows
   "Host tidak terjangkau".
+- App: event labels distinguish detection vs. processing time; larger robot icon.
+- `tools/qemu/deploy.sh` also copies `teleopctl` and `latbench`; `install-qsc.sh` installs
+  the HAM package (`com.qnx.qnx800.target.os_services.ham`) by default.
 
 ### Fixed
+- teleopd `estop`: a `state` sent right after the SAFE_STOP event could still show the old
+  velocity (zero setpoint is now published before the event).
 - iOS app could not connect (403): teleopd and the mock now accept a same-host `Origin`
   (`http(s)://<Host>`, Host = IPv4 literal/localhost); foreign Origins and DNS-rebinding
   names stay 403. Handshake refusals log status, Origin and Host.
@@ -74,6 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - teleopd requires a 6-digit pairing token (`ws://host:8080/?t=<token>`, random at start or
   `-t`), compared in constant time (401); refuses browser `Origin`s except `-o` (403) and a
   second client while ARMED (409). LAN-only threat model documented in ARCHITECTURE.
+- teleopd no longer writes the pairing token to slog2 (stdout/`teleopd.log` only);
+  `/dev/teleop` status read keeps one snapshot across offsets; docs state that
+  `set-deadline` up to 1000 ms weakens safe-stop (root only, WARNING logged).
 - `estop` received after an `arm` always wins (receive timestamps), whatever the pulse order.
 - WebSocket handshake has a 2 s total deadline (non-blocking, ≤ 4 in flight), sends time out
   after 200 ms and drop the client; RSV bits and oversized/fragmented control frames are refused.

@@ -18,6 +18,7 @@ Target: **QNX 8.0 aarch64le** running in QEMU (`virt` machine), app on a phone.
 ## Processes
 
 ### teleopd
+- Threads: net (`10r`), control (`50f`), resmgr (`10r`, see *`/dev/teleop`*).
 - **Net thread**, `SCHED_RR` priority 10: own minimal RFC 6455 WebSocket server
   (`qnx/common/ws.c`, one operator; see *Pairing & threat model*). Decodes JSON,
   stores the payload in an inbox guarded by a `PTHREAD_PRIO_INHERIT` mutex and wakes
@@ -58,7 +59,7 @@ Target: **QNX 8.0 aarch64le** running in QEMU (`virt` machine), app on a phone.
 
 ### Pairing & threat model
 - teleopd prints a 6-digit pairing token at start (from `/dev/urandom`, or fixed with
-  `-t <token>`) to stdout and slog2. The client must connect to `ws://host:8080/?t=<token>`;
+  `-t <token>`) to stdout only (never to slog2, which any local user can read). The client must connect to `ws://host:8080/?t=<token>`;
   a wrong/missing token → HTTP 401 (constant-time compare).
 - A non-empty `Origin` other than `null` → 403 (blocks drive-by pages in a browser on the
   same LAN), except: the `-o` origin (e.g. a web dev build, `-o http://localhost:8081`) and
@@ -80,9 +81,29 @@ Simulated differential-drive robot (10×10 m area, clamped) integrated at 200 Hz
 pose; own watchdog zeroes velocity after 200 ms without a setpoint. teleopd keeps
 running without it (`plant_ok=false`, reconnect every 500 ms). **HAM** restart: M3.
 
-### Stretch
-- Resource manager `/dev/teleop` (read state / write commands from the shell).
-- `latbench`: p50/p99/max wake-up latency with a CPU hog → [BENCH.md](BENCH.md).
+### /dev/teleop (resource manager in teleopd)
+- **resmgr thread**, `SCHED_RR` 10: `resmgr_attach("/dev/teleop")` with the default
+  `iofunc_*` handlers plus own `read` and `devctl`; node `S_IFCHR 0640 root:root`. It is
+  optional: if the attach fails teleopd logs it and keeps running (the safe-stop does not
+  depend on it).
+- `read` (`cat /dev/teleop`, `teleopctl status`): `key=value` lines — `mode`, `hb_age_ms`,
+  `deadline_ms`, `pose_x/y/theta`, `plant_ok`, `events`, `hb_timeouts`, `detect_n`,
+  `detect_p50_us/p99_us/max_us`.
+- `devctl` (needs the node open for writing): `DCMD_TELEOP_SET_DEADLINE` (`int32_t` ms,
+  50–1000, validated in teleopd → `EINVAL`; `g_deadline_ns` is a C11 atomic read by the
+  control tick) and `DCMD_TELEOP_ESTOP` (stamps `estop_rx_ns` and sends the prio-50 estop
+  pulse, exactly like a WebSocket `estop`). Codes in `qnx/common/teleop_dcmd.h`, private
+  class 0xE0. Client: `qnx/teleopctl`.
+- **Safety note:** `SET_DEADLINE` can raise the heartbeat deadline up to 1000 ms, which
+  weakens the safe-stop guarantee to at most 1 s. Only root can do it (node mode 0640
+  root:root, devctl needs write access), every change logs a WARNING to slog2, and the
+  default stays 150 ms at each teleopd start.
+
+### Fault injection & bench
+- `qnx/latbench` CPU hog (`pthread_setschedparam`, one busy thread per CPU) driven by
+  `tools/fault/cpu-hog.sh`; `wsclient.py --bench N` runs N hb-loss trials → CSV;
+  `tools/fault/slay-plant.sh` kills simplant and times the recovery. Results:
+  [BENCH.md](BENCH.md).
 
 ## Protocol (JSON over WebSocket)
 
@@ -94,6 +115,7 @@ Client → server:
 | `cmd` | `seq`, `v`, `w`, `ts` | on input |
 | `arm` | — | on demand |
 | `estop` | — | on demand |
+| `stats_req` | — | on demand (app polls) |
 
 Server → client:
 
@@ -101,6 +123,13 @@ Server → client:
 |---|---|
 | `state` | `seq_ack`, `pose`, `vel`, `mode`, `hb_age_ms`, `rtt`, `plant_ok` |
 | `event` | `SAFE_STOP`, `reason`, `detect_us` |
+| `stats` | `n`, `p50_us`, `p99_us`, `max_us`, `buckets: [{le_us, count}]` (reply to `stats_req`) |
+
+- `stats` = histogram of `detect_us` of the last ≤ 1024 `hb_timeout` events kept by teleopd
+  (ring buffer, since teleopd start). Fixed buckets `le_us` = 150, 152, 154, 156, 158, 160,
+  165, 170 ms and `null` (+inf); a sample counts in the first bucket with `detect_us ≤ le_us`.
+  Percentiles are nearest-rank; `p50_us`/`p99_us`/`max_us` = −1 when `n` = 0. The mock
+  server answers with the same shape.
 
 - `state` at 20 Hz. `seq_ack` = last `hb.seq`; `hb_age_ms` = −1 before the first `hb`;
   `rtt` (ms) from a WebSocket ping/pong every 1 s, −1 until measured; `vel` = ramped
